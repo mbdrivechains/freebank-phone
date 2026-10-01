@@ -2,7 +2,10 @@
 
 > **Read this as of its date.** Since then: the pairing comparison code (P1) shipped in app v0.2.0, and Face ID
 > passkeys (residual risk 3) in app v0.2.1. The page served at `app.ecxfreebank.com` can now be checked against
-> this source byte for byte (P2; the top-level README says how). App v0.2.1 had a review of its own.
+> this source byte for byte (P2; the top-level README says how). App v0.2.1 had a review of its own. App v0.2.2
+> lets the page use the phone's camera, for "Scan the code on your desktop": `Permissions-Policy` now has
+> `camera=(self)` (R9 below says the camera was off), and that release's review covered the camera and the scanned
+> input.
 
 **Date:** 2026-09-29. **Reviewer:** an AI reviewer (Claude) for the FreeBank team, before the relay went public at
 `app.ecxfreebank.com`. **Baseline:** `5b02f5f` (this repo). **Fixes:** the commits that follow it (relay, page,

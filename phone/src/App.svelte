@@ -156,7 +156,6 @@
   {#key pairValue}
     <Pair {pairValue} alreadyPaired={!!pairing} on:paired={onPaired} />
   {/key}
-  {#if !pairValue}<HomeScreenHint />{/if}
 {:else if status === 'denied' && screen !== 'settings'}
   <section class="card stack">
     <h2>This phone was removed</h2>

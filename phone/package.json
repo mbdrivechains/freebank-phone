@@ -12,12 +12,15 @@
     "e2e:setup": "bash e2e/setup-browsers.sh",
     "e2e": "npm run build && node e2e/smoke.mjs"
   },
+  "dependencies": {
+    "jsqr": "1.4.0"
+  },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.0",
     "@tsconfig/svelte": "^5.0.4",
     "@types/node": "^18.19.130",
-    "jsqr": "^1.4.0",
     "playwright": "~1.52.0",
+    "qrcode-generator": "^2.0.4",
     "svelte": "^4.2.12",
     "svelte-check": "^3.8.0",
     "typescript": "^5.4.5",

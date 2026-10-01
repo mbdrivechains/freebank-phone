@@ -13,12 +13,14 @@
 //
 // Browsers live in node_modules (PLAYWRIGHT_BROWSERS_PATH=0); see e2e/setup-browsers.sh.
 import http from 'node:http';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { WebSocketServer, WebSocket } from 'ws';
 import jsQR from 'jsqr';
+import qrcode from 'qrcode-generator';
 import { MockDesktop } from './mock-desktop.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -37,7 +39,7 @@ if (!existsSync(join(dist, 'index.html'))) {
 // The headers fb-relay sends (relay/src/lib.rs, CSP and PERMISSIONS_POLICY): only 'self'.
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
   "manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-const PERMISSIONS = 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), fullscreen=()';
+const PERMISSIONS = 'camera=(self), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), fullscreen=()';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 
 // ---------- static server + mock relay (same origin, like the real relay) ----------
@@ -228,6 +230,29 @@ async function qrFromPage(page) {
   return jsQR(px, w, w)?.data ?? null;
 }
 
+/**
+ * A video for Chromium's fake camera (--use-file-for-fake-video-capture): each text as a QR code, dark on white,
+ * for `frames` frames at 10 a second, in turn (the camera loops it). Y4M 4:2:0: a luma plane, then flat chroma.
+ */
+function qrVideo(file, texts, frames = 30) {
+  const W = 640, H = 480;
+  const parts = [Buffer.from(`YUV4MPEG2 W${W} H${H} F10:1 Ip A1:1 C420jpeg\n`)];
+  const chroma = Buffer.alloc((W / 2) * (H / 2) * 2, 128);
+  for (const text of texts) {
+    const q = qrcode(0, 'M');
+    q.addData(text, 'Byte');
+    q.make();
+    const m = q.getModuleCount(), s = Math.floor(Math.min(W, H) / (m + 8));
+    const x0 = Math.floor((W - m * s) / 2), y0 = Math.floor((H - m * s) / 2);
+    const luma = Buffer.alloc(W * H, 255);
+    for (let r = 0; r < m; r++)
+      for (let c = 0; c < m; c++)
+        if (q.isDark(r, c)) for (let dy = 0; dy < s; dy++) luma.fill(0, (y0 + r * s + dy) * W + x0 + c * s, (y0 + r * s + dy) * W + x0 + (c + 1) * s);
+    for (let f = 0; f < frames; f++) parts.push(Buffer.from('FRAME\n'), luma, chroma);
+  }
+  writeFileSync(file, Buffer.concat(parts));
+}
+
 async function runEngine(name) {
   const { type, ctx } = ENGINES[name];
   const results = [];
@@ -269,6 +294,12 @@ async function runEngine(name) {
     check(`${what}: the phone shows the desktop's comparison code`, !!shown && shown === desktop, `"${text}", desktop ${desktop}`);
     desk.phoneShows = shown ?? 'nothing';
   };
+  // On an iPhone, the page a pairing QR code opens leads with the Home Screen app; pairing in Safari comes second.
+  const toPairForm = async (page) => {
+    if (name !== 'webkit') return;
+    await page.getByTestId('homescreen-first').waitFor({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Pair in this browser instead' }).click();
+  };
   if (REAL) {
     hostWs?.close();
     await hostConnect();
@@ -288,13 +319,20 @@ async function runEngine(name) {
 
     // 1. Not paired, no link.
     await page.goto(origin + '/');
-    await page.getByText('Open the pairing link from your FreeBank desktop app').waitFor();
+    await page.getByRole('button', { name: 'Scan the code on your desktop' }).waitFor();
     await shot(page, 'not-paired');
     check('not-paired screen', true);
 
     // 2. Pairing link.
     const link = desk.pairingLink(wsUrl, origin);
     await page.goto(link);
+    if (name === 'webkit') {
+      await page.getByTestId('homescreen-first').waitFor();
+      check('iPhone: the QR code page leads with the Home Screen app',
+        (await page.getByRole('button', { name: 'Copy link for your Home Screen app' }).count()) === 1);
+      await shot(page, 'pair-homescreen-first');
+    }
+    await toPairForm(page);
     await page.getByLabel('Name for this phone').waitFor();
     check('fragment stripped from the address bar', !page.url().includes('#pair') && !page.url().includes('pair='), page.url());
     const defName = await page.getByLabel('Name for this phone').inputValue();
@@ -446,7 +484,7 @@ async function runEngine(name) {
 
     // 10. Settings: forget.
     await page.getByRole('button', { name: 'Forget this desktop' }).click();
-    await page.getByText('Open the pairing link from your FreeBank desktop app').waitFor();
+    await page.getByRole('button', { name: 'Scan the code on your desktop' }).waitFor();
     const gone = await page.evaluate(() => new Promise((res) => {
       const r = indexedDB.open('freebank-phone');
       r.onsuccess = () => {
@@ -459,6 +497,7 @@ async function runEngine(name) {
     // Settings screen shot: pair again quickly and open settings.
     const link2 = desk.pairingLink(wsUrl, origin);
     await page.goto(link2);
+    await toPairForm(page);
     before = desk.pairs.length;
     await page.getByRole('button', { name: 'Pair', exact: true }).click();
     await compareCodes(page, 'pairing again', before);
@@ -467,11 +506,12 @@ async function runEngine(name) {
     await page.getByRole('button', { name: 'Forget this desktop' }).click();
     await shot(page, 'settings-forget');
     await page.getByTestId('forget-confirm').click();
-    await page.getByText('Open the pairing link from your FreeBank desktop app').waitFor();
+    await page.getByRole('button', { name: 'Scan the code on your desktop' }).waitFor();
     check('forget from settings', true);
 
     // A pairing link that the desktop refuses (code already used).
     await page.goto(link2);
+    await toPairForm(page);
     await page.getByRole('button', { name: 'Pair', exact: true }).click();
     await page.getByText('Not paired').waitFor({ timeout: 15000 });
     check('pair-refused handled', true);
@@ -479,6 +519,7 @@ async function runEngine(name) {
 
     // The owner sees different codes on the two screens (someone else's request) and denies it.
     await page.goto(desk.pairingLink(wsUrl, origin));
+    await toPairForm(page);
     before = desk.pairs.length;
     await page.getByRole('button', { name: 'Pair', exact: true }).click();
     await page.getByTestId('pair-code').waitFor({ timeout: 15000 });
@@ -505,7 +546,94 @@ async function runEngine(name) {
   } finally {
     await browser.close();
   }
+  if (name === 'chromium' || name === 'webkit') await scanFlow();
   return results;
+
+  /**
+   * "Scan the code on your desktop" in the Home Screen app (app v0.2.2), started as one (navigator.standalone).
+   * Chromium's fake camera shows another QR code, then the pairing code. WebKit here has no camera: the page says
+   * why and opens "Paste the pairing link", and the pasted link pairs.
+   */
+  async function scanFlow() {
+    const link = desk.pairingLink(wsUrl, origin);
+    const video = join(tmpdir(), `fb-scan-${process.pid}.y4m`);
+    const launch = {};
+    if (name === 'chromium') {
+      qrVideo(video, ['bitcoin:XkPvjfFq8Hj9wy9Wq3pRr1sBdXJxZ5nT2n', link]);
+      launch.args = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-video-capture=${video}`];
+    }
+    const scanProblems = [];
+    const b = await type.launch(launch);
+    try {
+      const context = await b.newContext({ ...ctx, colorScheme: 'dark', ignoreHTTPSErrors: tlsTest });
+      if (name === 'chromium') await context.grantPermissions(['camera'], { origin });
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'standalone', { value: true });
+        // Every camera stream the page opens, to check that it turns them off.
+        window.__streams = [];
+        const md = navigator.mediaDevices;
+        if (md?.getUserMedia) {
+          const open = md.getUserMedia.bind(md);
+          md.getUserMedia = async (c) => {
+            const st = await open(c);
+            window.__streams.push(st);
+            return st;
+          };
+        }
+      });
+      const page = await context.newPage();
+      page.on('pageerror', (e) => scanProblems.push('pageerror: ' + e.message));
+      page.on('console', (m) => {
+        if (process.env.SMOKE_DEBUG) console.log('    console:', m.type(), m.text());
+        if (inShot && /Refused to apply a stylesheet/.test(m.text())) return;
+        if (m.type() === 'error' || /Content Security Policy|CSP/i.test(m.text())) scanProblems.push('console: ' + m.text());
+      });
+      await page.goto(origin + '/');
+      await page.getByRole('heading', { name: name === 'webkit' ? 'Pair this Home Screen app' : 'Pair this phone' }).waitFor();
+      const steps = await page.locator('ol.steps li').allTextContents();
+      check('Home Screen app: the steps say which device does what',
+        steps.length === 3 && /^On your desktop:/.test(steps[0]) && /^On this phone:/.test(steps[1]) && /^On your desktop:/.test(steps[2]),
+        steps.map((t) => t.split(':')[0]).join(' / '));
+      await shot(page, 'scan-start');
+      await page.getByRole('button', { name: 'Scan the code on your desktop' }).click();
+      if (name === 'chromium') {
+        await page.getByTestId('scan-note').waitFor({ timeout: 15000 });
+        check('scan: another QR code is not taken, and the page says so',
+          /isn't a pairing code for this page/.test(await page.getByTestId('scan-note').textContent()));
+        await shot(page, 'scan-other-code');
+        await page.getByLabel('Name for this phone').waitFor({ timeout: 20000 });
+        check('scan: the pairing code is read', true);
+        const off = await page.evaluate(() =>
+          window.__streams.length > 0 && window.__streams.every((st) => st.getTracks().every((t) => t.readyState === 'ended')));
+        check('scan: the camera is off once the code is read', off);
+      } else {
+        await page.getByTestId('scan-error').waitFor({ timeout: 15000 });
+        check('scan with no camera says why and opens the paste route', await page.getByLabel('Pairing link').isVisible(),
+          (await page.getByTestId('scan-error').textContent()).slice(0, 60));
+        await shot(page, 'scan-no-camera');
+        await page.getByLabel('Pairing link').fill(link);
+        await page.getByRole('button', { name: 'Pair with this link' }).click();
+        await page.getByLabel('Name for this phone').waitFor();
+      }
+      const defName = await page.getByLabel('Name for this phone').inputValue();
+      check('Home Screen app: its default name', defName === (name === 'webkit' ? 'iPhone Home Screen' : 'Android phone'), defName);
+      const before = desk.pairs.length;
+      await page.getByRole('button', { name: 'Pair', exact: true }).click();
+      await compareCodes(page, 'pairing the Home Screen app', before);
+      await page.getByTestId('home').waitFor({ timeout: 15000 });
+      check('Home Screen app paired', true);
+      const netNoise = scanProblems.filter((m) => /WebSocket connection to .* failed/.test(m));
+      const real = scanProblems.filter((m) => !netNoise.includes(m));
+      check('scan: no page errors or CSP violations', real.length === 0, real.join(' | '));
+      await context.close();
+    } catch (e) {
+      check('scan flow completed', false, e.message.split('\n')[0]);
+      if (scanProblems.length) console.log('  problems:', scanProblems.join(' | '));
+    } finally {
+      await b.close();
+      rmSync(video, { force: true });
+    }
+  }
 }
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));

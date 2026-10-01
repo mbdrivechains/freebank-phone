@@ -71,10 +71,11 @@ pub mod close {
 pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; \
                        manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
-/// Browser features the page never uses. (It copies to the clipboard, which needs no policy for a top-level
-/// same-origin page.)
+/// Browser features the page never uses, and the camera for itself alone: "Scan the code on your desktop" reads the
+/// pairing QR code on the phone, and no picture leaves it (`phone/src/lib/scan.ts`). (It copies to the clipboard,
+/// which needs no policy for a top-level same-origin page.)
 pub const PERMISSIONS_POLICY: &str =
-    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), fullscreen=()";
+    "camera=(self), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), fullscreen=()";
 
 /// How long one outbound frame may take to write before the connection is dropped.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);

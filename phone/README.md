@@ -2,7 +2,10 @@
 
 The web page a phone (iPhone Safari/Firefox, Android Chrome/Firefox) opens to reach its owner's FreeBank
 desktop through the relay. Spec: `../relay/PROTOCOL.md` (phone side of Pairing, Session handshake, Requests).
-Svelte 4 + Vite 5 + TypeScript; WebCrypto only (P-256 ECDH, HKDF-SHA256, AES-256-GCM, SHA-256), no libraries.
+Svelte 4 + Vite 5 + TypeScript; WebCrypto only (P-256 ECDH, HKDF-SHA256, AES-256-GCM, SHA-256), no crypto libraries.
+One library, jsQR, reads the desktop's pairing QR code from the camera ("Scan the code on your desktop"); it is its
+own file, loaded only when Scan is tapped, and the pictures stay on the phone. Its license, and Svelte's, are in
+`public/licenses.txt`, served beside the page.
 
 ```bash
 npm install
@@ -11,7 +14,8 @@ npm test               # vitest: crypto vs ../relay/testvectors/kk-v1.json, QR (
 npm run check          # svelte-check / TypeScript
 npm run vectors        # regenerate ../relay/testvectors/kk-v1.json (reproducible, fixed keys)
 python3 ../relay/testvectors/check_kk_v1.py   # check the vectors independently (Python cryptography)
-npm run e2e:setup      # once: Playwright browsers into node_modules (+ WebKit libs, no sudo)
+npm run e2e:setup      # once: Playwright browsers into node_modules (+ WebKit libs, no sudo); again after npm ci,
+                       # which empties node_modules
 npm run e2e            # build, then smoke test in WebKit (390x844), Chromium (Pixel 7), Firefox (412x915)
 node e2e/smoke.mjs --real-relay   # same flow through ../relay/target/debug/fb-relay (mock desktop as host)
 node e2e/smoke.mjs --real-relay --relay-bin=../relay/target/release/fb-relay   # another build
@@ -24,7 +28,8 @@ node e2e/smoke.mjs --relay-url=https://127.0.0.1:18443   # a relay already runni
 | `src/lib/relay.ts` | `RelayLink`: WebSocket, join/joined/offline, frames, `closed` |
 | `src/lib/api.ts` | `PhoneClient`: handshake, reconnect with backoff, request ids, pending map, held sends |
 | `src/lib/pair.ts` | pairing flow (with the comparison code); `store.ts` IndexedDB (non-extractable device key); `qr.ts` QR encoder |
-| `src/components/` | Pair, Home, Receive, Send, Settings, Qr, Copy, Back |
+| `src/lib/scan.ts`, `homescreen.ts` | reading the pairing QR code with the camera; the Home Screen app (its own storage on iOS), pasted links |
+| `src/components/` | Pair, Scanner, Home, Receive, Send, Settings, Qr, Copy, Back, and the rest |
 | `scripts/kk-ref.mjs` | a second, independent implementation of the crypto (both sides) in plain JS |
 | `scripts/make-vectors.mjs` | writes the interop vectors for the Rust desktop (and the relay's proof) |
 | `e2e/mock-desktop.mjs` | fake desktop (pairing with the comparison code, the host proof, handshake, narrow door, held sends) on `kk-ref.mjs` |

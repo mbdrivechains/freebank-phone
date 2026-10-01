@@ -35,14 +35,15 @@ Then fetch the same files from app.ecxfreebank.com and hash them:
 
 ```sh
 mkdir live && cd live
-curl -s -o index.html https://app.ecxfreebank.com/
-for f in $(grep -oE '(src|href)="\./[^"]+"' index.html | sed 's/.*="\.\///; s/"$//') icon-192.png icon-512.png; do
-  mkdir -p "$(dirname "$f")"; curl -s -o "$f" "https://app.ecxfreebank.com/$f"
+for f in $(cd ../dist && find . -type f | sed 's|^\./||'); do
+  mkdir -p "$(dirname "$f")"; curl -sf -o "$f" "https://app.ecxfreebank.com/$f"
 done
 find . -type f | sort | xargs sha256sum
 ```
 
-The two lists must be the same eight files with the same hashes. If they differ, please report it (Security, below).
+Every file of your build is fetched by its path, including the QR code reader (`assets/jsQR-….js`), which the page
+loads only when Scan is tapped, so `index.html` doesn't name it. The two lists must be the same files with the same
+hashes. If they differ, please report it (Security, below).
 Each commit here names the build of app.ecxfreebank.com it matches; the newest commit is the live one.
 
 The relay's own binary isn't reproducible yet. It never sees your keys or what you send, but it does serve the page,

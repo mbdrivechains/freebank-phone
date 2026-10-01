@@ -53,7 +53,8 @@ Limits (in `Config`; see `SECURITY_REVIEW.md` for why):
 Every HTTP response carries `Content-Security-Policy` (`default-src 'none'`, then `'self'` for scripts, styles,
 images, connections and the manifest; no inline code, no `data:`; `frame-ancestors 'none'`),
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, a `Permissions-Policy`
-that turns off features the page never uses, `Cross-Origin-Opener-Policy` and `Cross-Origin-Resource-Policy:
+that turns off features the page never uses and keeps the camera to the page itself (it scans the desktop's pairing
+QR code), `Cross-Origin-Opener-Policy` and `Cross-Origin-Resource-Policy:
 same-origin`, and `Cache-Control` (`no-cache` for the page, `immutable` for the hashed files under `/assets/`).
 The exact values are `CSP` and `PERMISSIONS_POLICY` in `src/lib.rs`.
 

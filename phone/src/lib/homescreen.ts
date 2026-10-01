@@ -1,8 +1,8 @@
 import { writable } from 'svelte/store';
 
-// The phone page on a Home Screen (app v0.2.1). iOS gives a Home
-// Screen icon its own storage, so an icon pairs itself: the page opened from the QR code copies the
-// pairing link for it, and the icon takes it with "Paste pairing link".
+// The phone page on a Home Screen (app v0.2.1). iOS gives a Home Screen icon its own storage, so an icon
+// pairs itself: it scans the desktop's QR code ("Scan the code on your desktop", lib/scan.ts, since v0.2.2),
+// or takes the link with "Paste pairing link".
 
 /** Opened from a Home Screen icon (iOS says so in navigator.standalone; others in the display mode). */
 export function standalone(): boolean {

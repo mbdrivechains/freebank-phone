@@ -38,7 +38,7 @@
 
   <div class="card stack">
     <h2>Forget this desktop</h2>
-    <p class="small">Deletes this phone's key and the desktop's details from this browser. To also remove the phone from your desktop, use FreeBank on the desktop (Settings → Phones).</p>
+    <p class="small">Deletes this phone's key and the desktop's details from this browser. To also remove the phone from your desktop, use FreeBank on the desktop (Settings, Phone, Revoke).</p>
     {#if !confirming}
       <button class="danger full" on:click={() => (confirming = true)}>Forget this desktop</button>
     {:else}

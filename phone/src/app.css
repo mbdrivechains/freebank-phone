@@ -62,7 +62,7 @@ h3 { font-size: 15px; font-weight: 600; color: var(--muted); text-transform: upp
 p { color: var(--text); }
 .muted { color: var(--muted); }
 .small { font-size: 14px; }
-.error { color: var(--error); }
+.error { color: var(--error); overflow-wrap: anywhere; }
 
 .card {
   background: var(--surface);
