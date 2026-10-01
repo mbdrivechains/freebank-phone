@@ -1,0 +1,285 @@
+# FreeBank phone relay: protocol v1
+
+The FreeBank phone page lets a phone use the wallet in the FreeBank desktop app, through a relay that only passes
+sealed messages along. A phone can:
+- show the desktop wallet's balance and history;
+- get a receive address;
+- send a payment within its daily limit; anything above it waits for the desktop.
+
+Revoking the phone in the desktop app cuts it off.
+
+**Targets:** iPhone (Safari and Firefox, both WebKit) and Android phones (Chrome, and Firefox for Android). Only
+standard WebCrypto and IndexedDB are used, tested in WebKit, Chromium (Android profile) and Firefox.
+
+## Three parts
+
+| Part | Where | Language |
+|---|---|---|
+| **Relay**: a dumb pipe plus a static file server for the phone page | `relay/` in this repo | Rust (tokio, axum 0.8) |
+| **Phone page**: the web interface | `phone/` in this repo; built into `phone/dist/`, served by the relay at `/` | Svelte 4 + Vite 5 + TypeScript, WebCrypto only (no crypto libraries) |
+| **Desktop side**: pairing, device list, the narrow door, the outbound relay link | the FreeBank app ([mbdrivechains/freebank-app](https://github.com/mbdrivechains/freebank-app), `src-tauri/src/phone/`) | Rust (Tauri backend) + Svelte |
+
+## Keys and crypto (the same on both ends)
+
+- **Curve:** ECDH on **P-256** (WebCrypto `ECDH`, `namedCurve: "P-256"`; Rust crate `p256` 0.13).
+- **Public key format:** uncompressed SEC1 (65 bytes), base64url with no padding, called `b64u` below.
+- **KDF:** HKDF-SHA256 (WebCrypto `HKDF`; crate `hkdf` 0.12).
+- **AEAD:** AES-256-GCM with a 12-byte nonce (WebCrypto `AES-GCM`; crate `aes-gcm` 0.10).
+- **Desktop static key `D`:** made once and kept in the app's data folder (file mode 0600). `room = b64u(SHA-256(D_pub))[0..22]`.
+- **Phone device key `P`:** made at pairing. It is a **non-extractable** WebCrypto key, kept in IndexedDB.
+- **One pairing code `C`:** 16 random bytes, valid for 5 minutes, usable once.
+
+## Pairing
+
+The desktop shows a QR code (Settings, "Pair a phone"). It encodes this URL:
+
+```
+https://<relay host>/#pair=<b64u of JSON {"v":1,"relay":"wss://<relay host>/ws","room":"<room>","d":"<b64u D_pub>","c":"<b64u C>"}>
+```
+
+The fragment never reaches the relay's logs, because browsers don't send fragments. Opening the URL on the phone
+loads the page, which reads the fragment and removes it from the address bar.
+
+1. The phone makes `P` and an ephemeral key `E`. It computes `k = HKDF(ikm=ECDH(E, D_pub), salt=C, info="fb-pair-v1")`
+   and sends a join (below), then this pair request as one encrypted message:
+   `{"t":"pair","e":"<b64u E_pub>","ct":"<b64u AES-GCM(k, nonce, JSON {"p":"<b64u P_pub>","name":"<device name>"})>","n":"<b64u nonce>"}`
+2. The desktop derives the same key and checks that `C` is live and unused. It shows **"Allow this phone? <name>"**,
+   with the comparison code (below).
+   - On Allow, it stores `P_pub` with the name and the date, marks `C` used, and replies `{"t":"paired"}` in clear.
+   - On Deny, or when `C` has expired, it replies `{"t":"pair-refused"}`.
+3. The phone saves `{relay, room, D_pub}` and its key `P`.
+
+**The comparison code** (added 2026-09-29, before the relay went public; security review finding P1). Anyone who sees
+the QR code during its 5 minutes could otherwise pair first, and "Allow this phone?" couldn't tell the phones apart.
+- Both sides compute `h = SHA-256("fb-pair-sas-v1" || D_pub || P_pub || E_pub || C)`, with the keys as raw 65-byte
+  points and `C` as its 16 bytes. The code is the first 4 bytes of `h` read as a big-endian unsigned integer, modulo
+  1,000,000, written as 6 digits with leading zeros and shown as two groups of three ("042 917").
+- The phone shows it as soon as the pair request is out: "Check that your desktop shows 042 917".
+- The desktop shows it in "Allow this phone?": "Allow only if your phone shows 042 917".
+- A phone paired by someone else gives a code from a different `P` and `E`, so the codes don't match and the owner
+  denies it. The desktop shows each pair request that arrives for a live `C` with its own code; allowing one marks `C`
+  used and refuses the rest.
+- The test vectors (`relay/testvectors/kk-v1.json`) carry the code for the pairing vector.
+
+## Session handshake (each time the phone connects)
+
+This works like Noise KK: both sides know each other's static keys.
+
+1. The phone makes an ephemeral key `eP` and sends `{"t":"hello","p":"<b64u P_pub>","e":"<b64u eP_pub>"}`.
+2. The desktop refuses an unknown or revoked `P_pub` with `{"t":"denied"}`. Otherwise it makes an ephemeral key `eD`
+   and replies `{"t":"hello-ok","e":"<b64u eD_pub>"}`.
+3. Both sides compute
+   `ikm = ECDH(eP,eD) || ECDH(eP,D) || ECDH(P,eD)` (phone side; the desktop mirrors it),
+   `th = SHA-256("fb-kk-v1" || P_pub || D_pub || eP_pub || eD_pub)`, then
+   `k_pd || k_dp = HKDF(ikm, salt=th, info="fb-session-v1", L=64)`.
+   `k_pd` encrypts phone to desktop, and `k_dp` encrypts desktop to phone.
+4. Nonces are a 12-byte big-endian counter per direction, starting at 0. A message that is out of order or fails to
+   decrypt closes the session.
+5. All later messages are `{"t":"m","ct":"<b64u>"}`, and the plaintext is JSON (next section).
+
+## Requests: the narrow door
+
+The plaintext is `{"id":<int>,"m":"<method>","a":{...}}`. The reply is `{"id":<int>,"ok":<result>}` or
+`{"id":<int>,"err":"<message>"}`.
+
+| Method | Args | Result | Desktop calls |
+|---|---|---|---|
+| `balance` | — | `{"confirmed":<ECX>,"pending":<ECX>}` | `getbalance`, `getunconfirmedbalance` |
+| `history` | `{"count":<=50}` | a list of `{txid, category, amount, confirmations, time, address}` | `listtransactions` |
+| `receive` | — | `{"address":"X…"}` | `getnewaddress "" legacy` |
+| `send` | `{"address","amount"}` | `{"txid"}` or `{"pending":"<confirm id>"}` | `sendtoaddress` |
+| `status` | — | `{"blocks","synced","limit_left","face_id","face_id_sends"}` | `getblockchaininfo` + the limit ledger + the phone's passkey (v0.2.1) |
+
+- **Send limits:**
+  - a per-phone daily limit, default **0.1 ECX**, set in desktop Settings;
+  - a send above the day's remaining limit is held for **confirmation on the desktop** ("Phone <name> wants to send X
+    to Y"). The phone shows "waiting for your desktop";
+  - every send is shown and logged on the desktop.
+- **A held send** gets its final reply later, under the same `id`: `{"id","ok":{"txid"}}` once confirmed, or
+  `{"id","err":"declined on the desktop"}`. The phone keeps the request open until then.
+- **Nothing else is reachable:** no raw RPC, no notes, houses or keys. Amounts are in ECX only.
+
+## The relay
+
+**`GET /`** and the static assets serve `phone/dist/`. **`GET /ws`** upgrades to a WebSocket. The first frame is
+JSON:
+
+- **Desktop:** `{"t":"host","room":"<room>","d":"<b64u D_pub>"}`.
+  - The relay checks that room equals `b64u(SHA-256(d))[0..22]`, then sends `{"t":"challenge","n":"<b64u 32 random>"}`.
+  - The desktop proves it holds `D` with `{"t":"proof","sig":"<b64u ECDSA-P256-SHA256, fixed 64-byte r||s>"}`,
+    using the same `D` key (the `p256` crate has `ecdsa`). The signed message is the ASCII bytes
+    `fb-relay-proof-v1` followed by the 32 bytes of `n` (added 2026-09-29, security review finding P4: `D` is also the
+    desktop's ECDH key, so its signatures carry a context string and can't be passed off as anything else). A proof
+    over the bare `n` is refused.
+  - A new proven host replaces the old one.
+- **Phone:** `{"t":"join","room":"<room>"}`. The relay gives it a channel number and sends `{"t":"joined","ch":<n>}`
+  to the phone, or `{"t":"offline"}` if no host is connected.
+- **After that, the relay only forwards:**
+  - phone to host as `{"ch":<n>,"d":<the phone's frame, a JSON value, unchanged>}`;
+  - host to phone by `{"ch":<n>,"d":…}`;
+  - when one side closes, it sends the other `{"t":"closed","ch":<n>}`.
+- **Limits:**
+  - 64 KiB per frame;
+  - 8 phones per room;
+  - 20 frames per second per connection;
+  - idle timeout 10 minutes, with pings every 30 seconds;
+  - no storage and no logging of frame contents.
+
+The relay config takes the listen address (default `127.0.0.1:8480`) and the static directory.
+
+**Details settled while building the relay** (2026-09-29):
+- The proof signs the **raw 32 challenge bytes**, not the b64u string, after the context string `fb-relay-proof-v1`
+  (P4, above; the vector is `proof` in `testvectors/kk-v1.json`).
+- After a good proof the relay sends the host **`{"t":"ready"}`**. Phones can join from then on.
+- The host isn't told when a phone joins. It learns the channel from the phone's first frame.
+- **The host may drop a phone** with `{"t":"close","ch":<n>}`, for example right after revoking it.
+- Frame budgets: phones 20 per second, the host 200 per second (it serves up to 8 phones). Going over closes the
+  connection.
+- Idle means nothing received at all, pongs included.
+- Phones belong to one host connection. When the host leaves or is replaced, they get `closed` and are disconnected.
+  Channel numbers are never reused while the room exists (a host that replaces another keeps counting). *(Security
+  review, 2026-09-29: they start at a random number, and a room whose host leaves is forgotten; keeping every room's
+  counter forever let memory grow without bound.)*
+- **Added by the security review (2026-09-29; `relay/README.md` and `SECURITY_REVIEW.md` have the numbers):**
+  - byte budgets next to the frame budgets (phones 64 KiB/s, the host 512 KiB/s), and pongs count;
+  - bounded queues: a phone that sends faster than its host reads is closed ("host busy"), not the host;
+  - at most 512 WebSocket connections (then HTTP 503);
+  - browsers' `Origin` must be on the relay's list (`--origin`), else HTTP 403. A request with no `Origin` (the
+    desktop app) is allowed;
+  - a phone that sends no frame within 30 seconds of joining (pings and pongs don't count) is closed (1008). The
+    desktop only learns of a channel from its first frame, so without this a silent stranger with the room id
+    would hold one of the 8 slots until the idle timeout (finding P5, the relay's half; the desktop closes a
+    channel that doesn't complete `hello` or a pair request).
+- Close codes:
+  - 1000: normal;
+  - 1003: binary frame;
+  - 1008: policy (bad handshake or proof, rate limit, room full, slow reader, host busy, a silent phone);
+  - 1009: frame too big;
+  - 4001: replaced by a new host.
+
+## Local test setup
+
+- Relay on `127.0.0.1:8480`.
+- The app pointed at `ws://127.0.0.1:8480/ws`, using a **regtest or throwaway FreeBank node**, never a real wallet.
+- The phone page tested in a headless browser (Playwright WebKit if it's available, else Chromium) against the same
+  relay.
+- WebCrypto needs a secure context, and `http://127.0.0.1` counts as one.
+- Reaching a real phone needs HTTPS: put the relay behind a proxy that terminates TLS (`relay/deploy/` has an nginx
+  site).
+
+## Details settled while building the phone page (2026-09-29)
+
+- **Byte layouts** (the test vectors, `relay/testvectors/kk-v1.json`, are the reference, and three separate
+  implementations agree: the page, a plain-JS copy and Python's `cryptography`, whose check is
+  `relay/testvectors/check_kk_v1.py`; the relay's tests check the room and the proof too):
+  - ECDH gives the 32-byte X coordinate;
+  - AES-GCM uses no AAD, and the 16-byte tag follows the ciphertext;
+  - the pairing HKDF output is 32 bytes.
+- **Framing:** the relay forwards the phone's frame to the host as a bare `d` value, unchanged.
+- **After `paired`**, the phone reconnects and starts a session with `hello`. The desktop never sees `hello` on the
+  channel that paired.
+- **A held send's final reply** goes on whichever session is current, under the same `id`. Other requests in flight
+  fail when the connection drops, and the page tells the user to check history, so a lost reply never leads to a blind
+  resend.
+- **Request ids** count up by one from a random safe integer chosen on each page load (see "Held sends" below; they
+  counted from 1 until 2026-09-29). The desktop must not treat them as unique for longer than a session.
+- **Amounts** are JSON numbers in ECX with up to 8 decimals, so a value like `1e-8` can appear. The desktop accepts it
+  and checks the address.
+- **iOS Home Screen icons** keep their own storage, apart from Safari. A phone paired in Safari has to pair again from
+  the icon.
+
+## Details settled while building the desktop side (2026-09-29)
+
+- `th` hashes the **raw 65-byte keys**, as the vectors already assume.
+- **Session lost:** a frame with no live session, or one that fails to decrypt, gets `{"t":"closed"}` in clear on
+  that channel. The phone then starts again with `hello`.
+- **Held sends:**
+  - the final reply goes to every live session of that phone;
+  - a send the desktop confirmed doesn't count against the phone's daily limit;
+  - **settled 2026-09-29 (v0.2.0):**
+    - the held reply is `{"id","ok":{"pending":"<confirm id>","why":"limit"|"locked"}}`. `limit` means the send is
+      over the day's remaining limit; `locked` means the desktop wallet is encrypted and phone sends aren't unlocked
+      (next item). The page shows "waiting for your desktop", and for `locked` adds that the desktop wallet is
+      locked;
+    - the final reply repeats the confirm id: `{"id","pending":"<confirm id>","ok":{"txid"}}` or
+      `{"id","pending":"<confirm id>","err":"<message>"}`. The page accepts a final reply only for a held request
+      with that confirm id;
+    - a held send **expires 10 minutes** after it was held. The desktop drops it and sends the final `err` "not
+      confirmed on the desktop within 10 minutes";
+    - held sends are saved in the phone folder (`held.json`, 0600), so a restart doesn't lose them. At start the
+      desktop cancels each one and sends the final `err` "the desktop app restarted; nothing was sent" to each new
+      session of that phone until that send's 10 minutes are up. **It never pays a held send after a restart;**
+    - the page starts its request ids at a random value on each load, so a late final reply can't match a request
+      from a newer page load. It also fails a held request itself 11 minutes after it was held: "Not confirmed on
+      your desktop in time. Check History before trying again."
+- **Encrypted wallets** (v0.2.0 makes the wallet passphrase required): a phone send within the limit goes through
+  only while **"Let my phone send while FreeBank is open"** is on in desktop Settings. Turning it on asks for the
+  wallet passphrase. The app keeps it in memory only, never on disk or in logs, and forgets it on quit or when the
+  setting is turned off. (From app v0.2.1, with "Keep my phone connected when FreeBank is closed", quitting hands it
+  over a pipe to the background part, which keeps it in memory until the app opens again; the app says so.) Each such
+  send unlocks the wallet for a few seconds and locks it again, unless the wallet was already unlocked. Without it, the send is held with `why: "locked"`, and confirming it on the desktop asks for
+  the passphrase.
+- **History** is newest first (settled 2026-09-29: the desktop reverses the node's order).
+- **Before the relay goes public** (2026-09-29, from the security review):
+  - the desktop's default relay is `wss://app.ecxfreebank.com/ws`, and its pairing links are
+    `https://app.ecxfreebank.com/#pair=…` naming that relay (the page refuses a link naming another relay);
+  - the desktop closes a phone channel that hasn't completed `hello` or a pair request within 30 seconds, so a
+    stranger with the room id can't hold the room's 8 phone slots (finding P5);
+  - device names are trimmed to 40 characters, with control, bidirectional and zero-width characters removed, before
+    they are shown or stored (finding P6).
+- **The desktop only connects to the relay** while a phone is paired or a pairing is open. Users who never pair make
+  no connection.
+
+## Face ID: passkeys (app v0.2.1)
+
+A phone may add a **passkey**: a WebAuthn credential on the phone's platform
+authenticator, used with Face ID, Touch ID, a fingerprint or the phone's passcode. Once a phone has one, **the desktop**
+answers that phone's sessions only after it proves it, so a phone picked up unlocked can't use FreeBank without its
+owner. The check is the desktop's, so a changed page can't skip it.
+
+- **Relying party.** `rp.id` is the relay's host (`app.ecxfreebank.com`). The desktop takes the expected origin from its
+  relay URL: `wss://<host>/ws` gives `https://<host>`; for local tests `ws://localhost:<port>/ws` gives
+  `http://localhost:<port>` (an IP address can't be a relying party, so tests use `localhost`).
+- **The credential.** ES256 (COSE alg -7) on P-256; `userVerification: "required"`, `attestation: "none"`,
+  `authenticatorAttachment: "platform"`. The phone reads its public key from the new credential's authenticator data
+  (COSE_Key: kty 2, alg -7, crv 1, x, y) and sends it as a 65-byte uncompressed point, with the credential id.
+- **Session methods** (inside the session, beside the narrow door's):
+
+| Method | Args | Result |
+|---|---|---|
+| `auth-start` | `{"for":"open"}`, `"send"`, `"add"` or `"change"` | `{"challenge":"<b64u 32 bytes>","cred":"<b64u id>"}`; `cred` is absent without a passkey |
+| `auth` | `{"ad","cdj","sig"}`, each b64u | `{}`: the session is verified |
+| `passkey-add` | `{"pk":"<b64u 65 bytes>","cred":"<b64u id>","sends":<bool>,"ad","cdj","sig"}`, and `"auth"` to replace one | `{}` |
+| `passkey-set` | `{"sends":<bool>,"auth":{"ad","cdj","sig"}}` | `{}` |
+| `passkey-remove` | `{"auth":{"ad","cdj","sig"}}` | `{}` |
+
+- **The gate.** While a phone has a passkey and its session isn't verified, every request but `auth-start` and `auth`
+  is refused with `{"id","err":"<message>","auth":"open"}`; the page then asks for Face ID and verifies. A phone
+  without a passkey has nothing to verify. A verified session lapses after **5 minutes without a request** and **30
+  minutes in all**; the next request is refused the same way.
+- **Changing Face ID takes Face ID** (found by app v0.2.1's security review: someone holding a phone left unlocked
+  with FreeBank open). `passkey-set`, `passkey-remove` and `passkey-add` over an existing passkey need a verified session
+  and `a.auth`, an assertion with the stored passkey over a `for:"change"` challenge.
+- **A challenge** is 32 random bytes from the desktop, for one session and one purpose (`for`), usable once, for 2
+  minutes. The first `auth` (or `send`, or `passkey-add`) that uses it uses it up, right or wrong.
+- **An assertion is checked** in full, with the phone's stored key (for `passkey-add`, the key being added, whose
+  assertion shows it works before it is kept):
+  1. `cdj` (clientDataJSON) is JSON with `type` `"webauthn.get"`, `challenge` equal to the live challenge in b64u
+     (no padding), `origin` equal to the expected origin, and `crossOrigin` absent or false;
+  2. `ad` (authenticatorData) is at least 37 bytes; its first 32 are SHA-256 of the rp id; its flags byte has UP
+     (0x01) and UV (0x04);
+  3. `sig` is a DER ECDSA P-256 signature over `ad || SHA-256(cdj)`;
+  4. the signature counter (`ad` bytes 33 to 36, big-endian): unless it and the stored one are both 0, it must be
+     higher than the stored one, which it then replaces. (Apple's passkeys always say 0.)
+- **Before each send**, if the phone chose it (`sends`): `send` carries `a.auth = {"ad","cdj","sig"}` over a
+  `for:"send"` challenge, checked before anything is reserved or paid. The prompt doesn't show the payment, so the
+  daily limit and the desktop's confirmation stay as they are.
+- **On the desktop**, Settings > Phone shows which phones have Face ID, and **Remove Face ID** takes a phone's passkey
+  away (for a phone that lost it). Revoke works as before.
+- **Test vectors:** `relay/testvectors/webauthn-v1.json` (a key, a challenge, an assertion that passes and one for each
+  way it fails, and an attestation object to read the key from).
+
+## Not in protocol v1
+
+- volunteer relays, peering, WebRTC;
+- the hosted wallet.

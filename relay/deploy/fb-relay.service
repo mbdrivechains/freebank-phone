@@ -1,0 +1,74 @@
+# fb-relay: the FreeBank phone relay and phone page, on 127.0.0.1:8480 behind nginx (app.ecxfreebank.com).
+# The files live in /opt/fb-relay/current (a symlink to /opt/fb-relay/releases/<commit>), owned by root and
+# read-only to the service.
+
+[Unit]
+Description=FreeBank phone relay (fb-relay) behind nginx at app.ecxfreebank.com
+After=network.target
+
+[Service]
+Type=simple
+User=fb-relay
+Group=fb-relay
+ExecStart=/opt/fb-relay/current/fb-relay --listen 127.0.0.1:8480 --static /opt/fb-relay/current/www --origin https://app.ecxfreebank.com --max-conns 256 --feedback-dir /var/lib/fb-relay/feedback
+# "Send to FreeBank" reports (POST /feedback, relay/src/feedback.rs): one owner-only file each, at most 1000 waiting.
+StateDirectory=fb-relay
+StateDirectoryMode=0700
+# Counts and channel numbers only; never addresses or frame contents. fb_relay=debug adds room prefixes.
+Environment=RUST_LOG=fb_relay=info
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=10s
+
+# Backstops. The relay caps itself at 512 WebSocket connections and bounded queues (SECURITY_REVIEW.md); the box
+# is shared with the seed, the ticker and the explorer, so the relay gets a modest share of it.
+# freebankd's conditions for this box (note 2026-09-29-from-freebankd-relay-install-yes; about 380 MB free): the
+# relay is capped at 128 MB and is the first thing the kernel kills if memory runs out, never the seed. With
+# --max-conns 256 (above) its worst case, every connection stalled with full queues, is about 105 MiB, under the cap.
+MemoryMax=128M
+OOMScoreAdjust=900
+TasksMax=64
+LimitNOFILE=4096
+CPUQuota=50%
+CPUWeight=50
+
+# Sandbox. The relay reads its own files, listens on loopback and writes only to the journal and its reports
+# folder (StateDirectory above, the one writable path under ProtectSystem=strict).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+# Nothing else under /opt (the explorer's files live there) is visible to the relay.
+TemporaryFileSystem=/opt:ro
+BindReadOnlyPaths=/opt/fb-relay
+InaccessiblePaths=-/srv -/mnt -/media
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+KeyringMode=private
+RemoveIPC=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

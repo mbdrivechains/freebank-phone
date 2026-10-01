@@ -1,0 +1,29 @@
+{
+  "name": "freebank-phone",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "vectors": "node scripts/make-vectors.mjs",
+    "e2e:setup": "bash e2e/setup-browsers.sh",
+    "e2e": "npm run build && node e2e/smoke.mjs"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.1.0",
+    "@tsconfig/svelte": "^5.0.4",
+    "@types/node": "^18.19.130",
+    "jsqr": "^1.4.0",
+    "playwright": "~1.52.0",
+    "svelte": "^4.2.12",
+    "svelte-check": "^3.8.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "vitest": "^1.6.0",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}

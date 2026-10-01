@@ -1,0 +1,118 @@
+/* FreeBank phone page. Tokens match the desktop app; light theme follows the system. */
+:root {
+  --bg: #0d1014;
+  --surface: #161a20;
+  --inset: #0f1217;
+  --text: #e8eaed;
+  --muted: #9aa3ae;
+  --accent: #d9a441;
+  --accent-ink: #1c1606;
+  --accent-tint: rgba(217, 164, 65, 0.12);
+  --border: #262c35;
+  --error: #e5746a;
+  --success: #5cc48a;
+  --warn: #e0b04a;
+  --radius: 14px;
+  --mono: ui-monospace, "SF Mono", Menlo, "Roboto Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f4ef;
+    --surface: #ffffff;
+    --inset: #efece5;
+    --text: #1a1d21;
+    --muted: #5e6670;
+    --accent: #9a6b12;
+    --accent-ink: #ffffff;
+    --accent-tint: rgba(154, 107, 18, 0.1);
+    --border: #ddd8cc;
+    --error: #b3372c;
+    --success: #1f7a4a;
+    --warn: #8a5a00;
+    color-scheme: light;
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  overscroll-behavior-y: none;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 17px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+#app {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.mono { font-family: var(--mono); }
+h2 { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+h3 { font-size: 15px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+p { color: var(--text); }
+.muted { color: var(--muted); }
+.small { font-size: 14px; }
+.error { color: var(--error); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.stack > * + * { margin-top: 14px; }
+
+button, .btn {
+  font: inherit;
+  font-weight: 600;
+  min-height: 52px;
+  padding: 0 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.danger { color: var(--error); border-color: var(--error); background: transparent; }
+button.full { width: 100%; }
+button.plain { background: transparent; border: none; min-height: 44px; padding: 0 10px; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+label { display: block; font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+input {
+  font: inherit;
+  font-size: 18px; /* >= 16px so iOS does not zoom */
+  width: 100%;
+  min-height: 52px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--inset);
+  color: var(--text);
+}
+input.mono { font-family: var(--mono); font-size: 16px; }
+
+.spinner {
+  display: inline-block;
+  width: 22px; height: 22px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
