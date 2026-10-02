@@ -5,7 +5,7 @@
 //!
 //! What is kept: the report's own fields and the minute it arrived. Never an address: nginx passes none on
 //! and limits each address itself (`deploy/nginx-app.ecxfreebank.com.conf`); the relay has no per-address
-//! logic. The relay's own limits: a 16 KiB body, a global rate (a burst of 20, then one every 6 s), and at
+//! logic. The relay's own limits: a 64 KiB body, a global rate (a burst of 20, then one every 6 s), and at
 //! most 1000 reports waiting in the folder. Without `--feedback-dir` there is no such route.
 //!
 //! Text is refused if it holds control characters other than new lines and tabs, so a report can't
@@ -30,10 +30,12 @@ use axum::{
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-/// The largest request body.
-pub const MAX_BODY: usize = 16 * 1024;
+/// The largest request body: the text, the details and the recent activity.
+pub const MAX_BODY: usize = 64 * 1024;
 /// The longest report text, in characters.
 pub const MAX_TEXT: usize = 8000;
+/// The longest recent activity, in characters.
+pub const MAX_ACTIVITY: usize = 40_000;
 /// Reports waiting in the folder; past it, new ones are turned away until some are read and removed.
 pub const MAX_WAITING: usize = 1000;
 /// The global rate: a burst of this many, then one every `REFILL_SECS`: several times one address's
@@ -60,6 +62,11 @@ pub struct Report {
     pub os: String,
     #[serde(default)]
     pub node: String,
+    /// Recent activity, sent only if the sender ticks "Include recent activity": the app's and the node's latest
+    /// log lines, or the phone page's latest events, with paths, IP addresses, coin addresses and transaction ids
+    /// masked by the sender, who sees exactly what goes.
+    #[serde(default)]
+    pub activity: String,
     /// "app" or "phone".
     pub from: String,
 }
@@ -76,6 +83,7 @@ struct Stored<'a> {
     app: &'a str,
     os: &'a str,
     node: &'a str,
+    activity: &'a str,
 }
 
 pub struct Desk {
@@ -149,6 +157,9 @@ pub fn problem(r: &Report) -> Option<&'static str> {
     if short.iter().any(|(s, max)| !field_ok(s, *max, false)) {
         return Some("a detail is too long, or holds control characters");
     }
+    if !field_ok(&r.activity, MAX_ACTIVITY, true) {
+        return Some("the activity is too long, or holds control characters");
+    }
     None
 }
 
@@ -218,6 +229,7 @@ fn store(dir: &Path, r: &Report) -> std::io::Result<String> {
         app: &r.app,
         os: &r.os,
         node: &r.node,
+        activity: &r.activity,
     })?;
     let mut o = std::fs::OpenOptions::new();
     o.write(true).create_new(true);
@@ -285,6 +297,7 @@ mod tests {
             app: "0.2.1".into(),
             os: "macOS 26 (arm64)".into(),
             node: "v0.2.17".into(),
+            activity: String::new(),
             from: "app".into(),
         }
     }
@@ -310,6 +323,14 @@ mod tests {
         assert!(problem(&r).is_some());
         let mut r = report("ok");
         r.kind = "spam".into();
+        assert!(problem(&r).is_some());
+        // Recent activity: many lines, within its length, and the same characters refused as in the text.
+        let mut r = report("ok");
+        r.activity = "12:01:07 node started\n12:01:09 phone link: online\n".repeat(700);
+        assert_eq!(problem(&r), None);
+        r.activity = "x".repeat(MAX_ACTIVITY + 1);
+        assert!(problem(&r).is_some());
+        r.activity = "12:01:07 \u{1b}[2J".into();
         assert!(problem(&r).is_some());
     }
 
@@ -339,10 +360,20 @@ mod tests {
         assert_eq!(res.status(), StatusCode::CREATED);
         let res = post(None, "application/json", ok.clone()).await.unwrap(); // the desktop app
         assert_eq!(res.status(), StatusCode::CREATED);
-        let files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+        let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+        files.sort();
         assert_eq!(files.len(), 2);
         let kept: serde_json::Value = serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
         assert_eq!((kept["kind"].as_str(), kept["text"].as_str()), (Some("idea"), Some("A dark QR code?")));
+        // A report with its recent activity, near the body limit, is kept with it.
+        let activity = "12:01:07 phone link: retrying (relay unreachable)\n".repeat(MAX_ACTIVITY / 52);
+        let with = serde_json::json!({"kind":"problem","text":"It froze","from":"app","activity":activity}).to_string();
+        assert!(with.len() < MAX_BODY && with.len() > 32 * 1024);
+        let res = post(None, "application/json", with).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let kept: Vec<serde_json::Value> = std::fs::read_dir(&dir).unwrap()
+            .map(|e| serde_json::from_slice(&std::fs::read(e.unwrap().path()).unwrap()).unwrap()).collect();
+        assert!(kept.iter().any(|k| k["activity"].as_str() == Some(activity.as_str())));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -358,7 +389,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
         let res = post(None, "application/json", r#"{"kind":"idea","text":"x","from":"app","ip":"1.2.3.4"}"#.into()).await.unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "the refused ones were not kept");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -9,6 +9,7 @@
   import Copy from './Copy.svelte';
   import HomeScreenHint from './HomeScreenHint.svelte';
   import Scanner from './Scanner.svelte';
+  import { note } from '../lib/activity';
 
   export let pairValue: string | null;
   export let alreadyPaired = false;
@@ -66,6 +67,7 @@
   }
 
   function scanFailed(e: CustomEvent<{ text: string; reload: boolean }>) {
+    note(`scan: ${e.detail.text}`);
     scanError = e.detail.text;
     scanReload = e.detail.reload;
     pasteOpen = !scanReload;

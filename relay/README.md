@@ -32,7 +32,7 @@ RUST_LOG=fb_relay=debug ./target/release/fb-relay           # log level (default
 | `--static <dir>` | `../phone/dist` (relative to the working directory) | The built phone page. Unknown paths fall back to `index.html`. |
 | `--origin <origin>` | none: any | A browser origin allowed to open `/ws` (repeatable), e.g. `https://app.ecxfreebank.com`. Others get 403. A request with no `Origin` (the desktop app) is always allowed. |
 | `--max-conns <n>` | `512` | WebSocket connections at once, hosts and phones together; past it `/ws` answers 503. |
-| `--feedback-dir <dir>` | none: no `/feedback` | Where reports are kept (made if missing, mode 0700). JSON of at most 16 KiB; kinds problem, idea, security; text up to 8000 characters, no control characters but new lines and tabs; a global burst of 20, then one a minute; at most 1000 waiting. The same `--origin` check as `/ws`. No addresses are kept (nginx passes none on). |
+| `--feedback-dir <dir>` | none: no `/feedback` | Where reports are kept (made if missing, mode 0700). JSON of at most 64 KiB; kinds problem, idea, security; text up to 8000 characters, and recent activity (sent only when the sender ticks it, masked and shown to them first) up to 40,000, no control characters but new lines and tabs; a global burst of 20, then one every 6 seconds (nginx adds one a minute per address, after a burst of 5); at most 1000 waiting. The same `--origin` check as `/ws`. No addresses are kept (nginx passes none on). |
 
 Limits (in `Config`; see `SECURITY_REVIEW.md` for why):
 

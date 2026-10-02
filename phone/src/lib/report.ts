@@ -32,18 +32,25 @@ export function clean(s: string, multiline: boolean): string {
     .join('');
 }
 
-/** The server takes 16 KiB in all, which some scripts reach before 8,000 characters. */
+/** The server takes 64 KiB in all: the text up to 8,000 characters (which some scripts make 14,000 bytes or more),
+ *  and the recent activity, at most 60 short lines here, up to 40,000. */
 const MAX_TEXT_BYTES = 14_000;
 
 /** Post a report; its reference, or throws with a message for the user. */
-export async function sendReport(kind: ReportKind, text: string, contact: string): Promise<string> {
+export async function sendReport(kind: ReportKind, text: string, contact: string, activity = ''): Promise<string> {
   if (new TextEncoder().encode(text).length > MAX_TEXT_BYTES) throw new Error('That is longer than FreeBank takes; shorten it, please.');
   let res: Response;
   try {
     res = await fetch('/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, text: clean(text.trim(), true), contact: clean(contact.trim(), false), from: 'phone' }),
+      body: JSON.stringify({
+        kind,
+        text: clean(text.trim(), true),
+        contact: clean(contact.trim(), false),
+        ...(activity ? { activity: clean(activity, true) } : {}),
+        from: 'phone',
+      }),
     });
   } catch {
     throw new Error("FreeBank's server couldn't be reached. Check your connection, or use GitHub.");

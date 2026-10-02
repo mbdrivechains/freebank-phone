@@ -2,6 +2,7 @@
 import { buildPairFrame, exportPub, fromB64u, genKeyPair, b64u, pairCode, type PairLink } from './crypto';
 import { RelayLink } from './relay';
 import { savePairing, type Pairing } from './store';
+import { note } from './activity';
 
 export class PairRefusedError extends Error {
   constructor() {
@@ -56,8 +57,10 @@ export async function pairPhone(link: PairLink, name: string, onWaiting: (code: 
         reject(new Error('The connection to your desktop dropped while pairing. Try again.'));
       };
       relay.send(frame);
+      note('pairing: asked the desktop');
       onWaiting(code);
     });
+    note(`pairing: ${answer}`);
     if (answer !== 'paired') throw new PairRefusedError();
   } finally {
     relay.onEnd = () => {};

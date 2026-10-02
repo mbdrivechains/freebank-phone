@@ -6,6 +6,7 @@
 import { writable, type Readable } from 'svelte/store';
 import { b64u, exportPub, fromB64u, genKeyPair, phoneSessionSecret, Session, type Bytes } from './crypto';
 import { OfflineError, type Connect, type Transport } from './relay';
+import { note } from './activity';
 
 export type Status = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'denied';
 
@@ -139,6 +140,7 @@ export class PhoneClient {
   }
 
   private setStatus(s: Status) {
+    if (s !== this.statusNow) note(`link: ${s}`);
     this.statusNow = s;
     this._status.set(s);
     if (s === 'connected') {
@@ -221,6 +223,7 @@ export class PhoneClient {
           return;
         }
         if (e instanceof OfflineError) this.setStatus('offline');
+        else note(`link: ${(e as Error)?.message ?? e}`);
       } finally {
         this.transport = null;
         this.session = null;
@@ -374,7 +377,18 @@ export class PhoneClient {
     return n;
   }
 
-  async call<T = any>(
+  /** A request, with its outcome noted for "Include recent activity" (lib/activity.ts). */
+  async call<T = any>(method: string, a: Record<string, unknown> = {}, onHeld?: (confirmId: string, why: HeldWhy) => void): Promise<T> {
+    const held = onHeld && ((c: string, why: HeldWhy) => (note(`${method}: held (${why})`), onHeld(c, why)));
+    const r = this.callRaw<T>(method, a, held);
+    r.then(
+      () => note(`${method}: ok`),
+      (e) => note(`${method}: ${(e as Error)?.message ?? e}`),
+    );
+    return r;
+  }
+
+  private async callRaw<T = any>(
     method: string,
     a: Record<string, unknown> = {},
     onHeld?: (confirmId: string, why: HeldWhy) => void,

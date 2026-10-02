@@ -48,7 +48,18 @@ let desktopOnline = true;
 let nextCh = 1;
 const phones = new Set();
 
+let lastReport = null; // the last report POSTed to the mock relay's /feedback
 const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/feedback') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      lastReport = JSON.parse(body);
+      res.writeHead(201, { 'content-type': 'application/json' });
+      res.end('{"id":"0a1b2c3d"}');
+    });
+    return;
+  }
   const p = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname)).replace(/^(\.\.[/\\])+/, '');
   let f = join(dist, p === '/' ? 'index.html' : p);
   if (!f.startsWith(dist) || !existsSync(f) || statSync(f).isDirectory()) f = join(dist, 'index.html');
@@ -481,6 +492,21 @@ async function runEngine(name) {
     await page.getByText('This phone was removed').waitFor({ timeout: 10000 });
     check('try again asks the desktop again and keeps the pairing',
       desk.log.filter((l) => l === 'hello: denied').length > denials);
+
+    // 9b. Report with recent activity: the page shows exactly what goes, masked, and sends it (mock relay only).
+    if (!REAL) {
+      await page.getByRole('button', { name: 'Report a problem or suggest something' }).click();
+      await page.getByLabel('Your report').fill('Test report from the smoke test.');
+      await page.getByLabel('Include recent activity').check();
+      const shown = (await page.getByTestId('activity').textContent()).trim();
+      check('report: recent activity shown before sending', /link: connected/.test(shown) && /balance: ok/.test(shown), shown.split('\n').length + ' lines');
+      check('report: activity masked (no txid, address or IP)', !/[0-9a-f]{64}|\bX[1-9A-HJ-NP-Za-km-z]{25,39}\b|\b\d{1,3}(\.\d{1,3}){3}\b/.test(shown));
+      await shot(page, 'report-activity');
+      await page.getByRole('button', { name: 'Send to FreeBank' }).click();
+      await page.getByText('Sent to FreeBank').waitFor({ timeout: 10000 });
+      check('report: sent with the activity shown', lastReport?.activity === shown && lastReport?.from === 'phone', JSON.stringify(lastReport).slice(0, 80));
+      await page.getByRole('button', { name: 'Back' }).click();
+    }
 
     // 10. Settings: forget.
     await page.getByRole('button', { name: 'Forget this desktop' }).click();
