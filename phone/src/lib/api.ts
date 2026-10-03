@@ -29,7 +29,77 @@ export interface NodeStatus {
   /** Face ID (desktop v0.2.1): this phone has a passkey; each send asks for it too. */
   face_id?: boolean;
   face_id_sends?: boolean;
+  /** Desktop v0.2.5: it answers notes, houses and the note actions. */
+  credit?: boolean;
+  /** Desktop v0.2.5: turning Face ID on here waits for another phone's approval first ("Approve sends on my phone"). */
+  add_asks?: boolean;
 }
+
+/** A house's notes this wallet holds (desktop v0.2.5, `notes`). Amounts are ECX: one note unit is one sat. */
+export interface NoteHolding {
+  house: number;
+  name: string | null;
+  /** o open, s stressed, d suspended, i insolvent, w wound down; and its name */
+  state: string;
+  state_name: string;
+  amount: number;
+  /** under demand: in the payout queue (suspended house) or a formal demand (open house) */
+  demanded: number;
+  /** what can be redeemed now (while suspended, only the demanded notes) */
+  redeemable: number;
+  can_redeem: boolean;
+  can_demand: boolean;
+  /** the yearly rate on demands queued while the house is suspended, in basis points (1000 = 10%) */
+  rate_bps: number | null;
+}
+
+/** One house of the directory (desktop v0.2.5, `houses`). */
+export interface HouseInfo {
+  house: number;
+  name: string | null;
+  state: string;
+  state_name: string;
+  /** last attested reserves against notes outstanding, in basis points */
+  ratio_bps: number | null;
+  outstanding: number;
+  reserves: number | null;
+  attested_at: number | null;
+  rate_bps: number | null;
+}
+
+/** What the desktop asks this phone to approve (desktop v0.2.5, "Approve sends on my phone"): a send from the desktop,
+ * another payment ("action": notes, bills, pools), something that would weaken the setting ("change"), or a change
+ * the recovery words made that waits a day ("scheduled": approving makes it now, declining cancels it). Face ID signs
+ * `challenge`, made for this one approval. */
+export interface ApprovalAsk {
+  id: string;
+  what: 'send' | 'action' | 'change' | 'scheduled';
+  /** ECX: a send's amount, an action's cost, a scheduled change's new amount (null: off) */
+  amount: number | null;
+  address: string;
+  text: string | null;
+  challenge: string;
+  cred: string;
+  /** unix seconds, by the desktop's clock */
+  expires: number;
+  /** seconds left when the desktop sent it (desktop v0.2.5 on) */
+  secs?: number;
+  /** ms, by this phone's clock: when the desktop stops waiting (counted from when it arrived) */
+  deadline: number;
+}
+
+/** A payment from this phone: ECX (`send`), or a house's notes sent, redeemed or demanded. */
+export type PaymentKind = 'send' | 'note-send' | 'note-redeem' | 'note-demand';
+export interface Payment {
+  kind: PaymentKind;
+  /** a note action's house */
+  house?: number;
+  /** empty for a redeem or a demand */
+  address: string;
+  amount: number;
+}
+/** The methods whose reply may be held for the desktop (PROTOCOL.md, held sends). */
+const PAYMENTS = new Set<string>(['send', 'note-send', 'note-redeem', 'note-demand']);
 
 /** A WebAuthn assertion, each part b64u (passkey.ts). */
 export interface AssertionParts {
@@ -113,6 +183,9 @@ export class PhoneClient {
   /** The desktop asked for Face ID (a new session of a phone with a passkey); false once it is given. */
   private readonly _locked = writable(false);
   readonly locked: Readable<boolean> = { subscribe: this._locked.subscribe };
+  /** Approvals the desktop asked for and still waits on (desktop v0.2.5). */
+  private readonly _approvals = writable<ApprovalAsk[]>([]);
+  readonly approvals: Readable<ApprovalAsk[]> = { subscribe: this._approvals.subscribe };
   private statusNow: Status = 'idle';
 
   private transport: Transport | null = null;
@@ -164,6 +237,7 @@ export class PhoneClient {
 
   stop() {
     this.stopped = true;
+    this._approvals.set([]);
     this.transport?.close();
     this.wake?.();
     for (const [id, p] of this.pending) {
@@ -213,6 +287,8 @@ export class PhoneClient {
         this.transport = t;
         this.attempt = 0;
         t.onFrame = (f) => this.onFrame(f);
+        // A new session: the desktop tells it again whatever it still waits for, once this phone passed Face ID.
+        this._approvals.set([]);
         hs.early.forEach((f) => this.onFrame(f));
         this.setStatus('connected');
         await ended;
@@ -308,6 +384,20 @@ export class PhoneClient {
   }
 
   private onReply(msg: any) {
+    // The desktop asks for an approval, or stops waiting for one (desktop v0.2.5): not replies to a request.
+    if (msg && typeof msg === 'object' && msg.approve && typeof msg.approve.id === 'string') {
+      const a = msg.approve as ApprovalAsk;
+      // Counted from now: this phone's clock may not agree with the desktop's.
+      a.deadline = typeof a.secs === 'number' ? Date.now() + a.secs * 1000 : a.expires * 1000;
+      this._approvals.update((l) => [...l.filter((x) => x.id !== a.id), a]);
+      note('approval: asked');
+      return;
+    }
+    if (msg && typeof msg === 'object' && typeof msg['approve-done'] === 'string') {
+      const id = msg['approve-done'];
+      this._approvals.update((l) => l.filter((x) => x.id !== id));
+      return;
+    }
     if (!msg || typeof msg !== 'object' || typeof msg.id !== 'number') return; // no id: nothing to match
     const p = this.pending.get(msg.id);
     if (!p) return;
@@ -325,7 +415,7 @@ export class PhoneClient {
         p.reject(new LockedError(String(msg.err)));
       } else if (msg.starting === true) p.reject(new StartingError(String(msg.err)));
       else p.reject(new Error(String(msg.err)));
-    } else if (!p.held && p.method === 'send' && isHeldReply(msg.ok)) {
+    } else if (!p.held && PAYMENTS.has(p.method) && isHeldReply(msg.ok)) {
       const confirmId = msg.ok.pending;
       if (typeof confirmId !== 'string' || !confirmId) {
         this.finish(msg.id, p);
@@ -403,7 +493,7 @@ export class PhoneClient {
       const p: Pending = { method, resolve, reject, onHeld, held: null };
       p.timer = setTimeout(() => {
         this.finish(id, p);
-        reject(new LostError(method === 'send'
+        reject(new LostError(PAYMENTS.has(method)
           ? 'Your desktop did not answer in time. Check your history before trying again.'
           : 'Your desktop did not answer in time.'));
       }, this.o.requestTimeoutMs);
@@ -425,7 +515,19 @@ export class PhoneClient {
   nodeStatus = () => this.call<NodeStatus>('status');
   /** `auth`: Face ID over a `for: "send"` challenge, when this phone chose Face ID before each send. */
   send = (address: string, amount: number, onHeld?: (confirmId: string, why: HeldWhy) => void, auth?: AssertionParts) =>
-    this.call<SendResult>('send', auth ? { address, amount, auth } : { address, amount }, onHeld);
+    this.pay({ kind: 'send', address, amount }, onHeld, auth);
+  /** A payment: ECX, or (desktop v0.2.5) a house's notes. The same guard as a send: Face ID when chosen, the daily
+   * limit, the desktop's approval above it. */
+  pay = (p: Payment, onHeld?: (confirmId: string, why: HeldWhy) => void, auth?: AssertionParts) => {
+    const a: Record<string, unknown> = { amount: p.amount };
+    if (p.kind === 'send' || p.kind === 'note-send') a.address = p.address;
+    if (p.kind !== 'send') a.house = p.house;
+    if (auth) a.auth = auth;
+    return this.call<SendResult>(p.kind, a, onHeld);
+  };
+  /** Desktop v0.2.5: this wallet's notes by house, and the house directory. */
+  notes = () => this.call<NoteHolding[]>('notes');
+  houses = () => this.call<HouseInfo[]>('houses');
 
   // Face ID (relay/PROTOCOL.md, "Face ID: passkeys").
   authStart = (purpose: 'open' | 'send' | 'add' | 'change') =>
@@ -452,6 +554,26 @@ export class PhoneClient {
     }
   }
   passkeyRemove = (auth: AssertionParts) => this.call<object>('passkey-remove', { auth });
+  /** Answer an approval: Face ID over its challenge, or a decline. Either way its card goes, also when the desktop
+   * no longer waits for it. */
+  async approve(id: string, auth: AssertionParts) {
+    await this.answer(id, { id, auth });
+  }
+  async decline(id: string) {
+    await this.answer(id, { id, decline: true });
+  }
+  private async answer(id: string, a: Record<string, unknown>) {
+    try {
+      await this.call<object>('approve', a);
+    } catch (e) {
+      if (!/no longer waiting/.test((e as Error).message)) throw e;
+    }
+    this.dismiss(id);
+  }
+  /** Put a card away until the desktop asks again (its next session): "Not now", or the time ran out. */
+  dismiss(id: string) {
+    this._approvals.update((l) => l.filter((x) => x.id !== id));
+  }
 }
 
 export type { Bytes };

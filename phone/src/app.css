@@ -116,3 +116,28 @@ input.mono { font-family: var(--mono); font-size: 16px; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+
+/* A house's state (Notes, Houses): o open, s stressed, d suspended, i insolvent, w wound down. */
+.badge {
+  font-size: 13px;
+  font-weight: 650;
+  border-radius: 999px;
+  padding: 3px 10px;
+  border: 1px solid var(--muted);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.s-o {
+  color: var(--success);
+  border-color: var(--success);
+}
+.badge.s-s,
+.badge.s-d {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.badge.s-i,
+.badge.s-w {
+  color: var(--error);
+  border-color: var(--error);
+}

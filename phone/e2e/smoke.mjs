@@ -478,6 +478,63 @@ async function runEngine(name) {
     await page.getByTestId('balance').getByText('11.44').waitFor({ timeout: 10000 });
     desk.locked = false;
 
+    // 6c. Notes and houses (desktop v0.2.5): one card per house, a redeem over the limit held and approved on the
+    // desktop, and the house directory.
+    await page.getByTestId('open-notes').click();
+    await page.getByTestId('note').first().waitFor({ timeout: 10000 });
+    const noteCards = await page.getByTestId('note').count();
+    check('notes: one card per house', noteCards === 2, `${noteCards} cards`);
+    check('notes: the suspended house says so', await page.getByTestId('note').nth(1).getByText('Suspended').isVisible());
+    await shot(page, 'notes');
+    await page.getByTestId('note').first().getByRole('button', { name: 'Redeem' }).click();
+    await page.getByTestId('note-action').waitFor();
+    check('redeem: starts from what can be redeemed', (await page.getByLabel('Amount of notes').inputValue()) === '0.5');
+    await page.getByRole('button', { name: 'Review' }).click();
+    await page.getByRole('button', { name: 'Redeem 0.50 ECX' }).click();
+    await page.getByTestId('note-held').waitFor({ timeout: 10000 });
+    await shot(page, 'note-held');
+    await page.getByTestId('note-receipt').waitFor({ timeout: 15000 });
+    check('redeem over the limit: approved on the desktop, then a receipt',
+      desk.requests.some((r) => r.m === 'note-redeem' && r.a.house === 3 && r.a.amount === 0.5));
+    await shot(page, 'note-receipt');
+    await page.getByRole('button', { name: 'Done' }).click();
+    await page.getByTestId('note').first().waitFor({ timeout: 10000 });
+    await page.getByRole('button', { name: 'All houses' }).click();
+    await page.getByTestId('house').first().waitFor({ timeout: 10000 });
+    check('houses: the directory', (await page.getByTestId('house').count()) === 2);
+    await shot(page, 'houses');
+    await page.getByRole('button', { name: /Back/ }).click();
+    await page.getByTestId('notes').waitFor();
+    await page.getByRole('button', { name: /Back/ }).click();
+    await page.getByTestId('home').waitFor();
+
+    // 6d. Approve on my phone (desktop v0.2.5): the desktop asks; the card shows over Home; Decline answers it.
+    const aid = desk.askApproval({ what: 'send', amount: 2.5, address, text: null });
+    await page.getByTestId('approve-ask').waitFor({ timeout: 10000 });
+    check('approval: the card shows what the desktop wants to send',
+      (await page.getByTestId('approve-ask').textContent()).includes('2.50') && (await page.getByTestId('approve-ask').textContent()).includes(address));
+    await shot(page, 'approve-ask');
+    await page.getByRole('button', { name: 'Decline' }).click();
+    await page.getByTestId('approve-ask').waitFor({ state: 'detached', timeout: 10000 });
+    check('approval: declined on the phone', desk.approvals.get(aid)?.answer === 'declined');
+    // A card the desktop gave up on (it quit, or "approve-done" was lost) goes by itself, and a desktop clock ten
+    // minutes ahead doesn't end it early.
+    desk.askApproval({ what: 'action', amount: 0.05102, address: '', text: `Send 0.05 ECX of house #3's notes to ${address}` }, 3, 600);
+    await page.getByTestId('approve-ask').getByText('fees included').waitFor({ timeout: 10000 });
+    check('approval: a payment other than a send shows what it costs', true);
+    await page.getByTestId('approve-ask').getByText('Your desktop stopped waiting').waitFor({ timeout: 10000 });
+    await page.getByTestId('approve-ask').waitFor({ state: 'detached', timeout: 10000 });
+    check('approval: a card the desktop gave up on goes by itself', true);
+    // The recovery words' change waits a day: "Not now" puts the card away.
+    desk.askApproval({ what: 'scheduled', amount: null, address: '', text: 'x' }, 86_400);
+    await page.getByTestId('approve-ask').getByText('Your recovery words were used').waitFor({ timeout: 10000 });
+    check('approval: the recovery words\' change counts down in hours',
+      /\b(23 h 59|24 h 0) min\b/.test(await page.getByTestId('approve-ask').textContent()));
+    await shot(page, 'approve-scheduled');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByTestId('approve-ask').waitFor({ state: 'detached', timeout: 10000 });
+    check('approval: "Not now" puts it away', true);
+
     // 7. Desktop drops off the relay, then comes back.
     await goOffline();
     await page.getByTestId('status').getByText(/Desktop offline|Reconnecting/).waitFor({ timeout: 10000 });
@@ -492,7 +549,8 @@ async function runEngine(name) {
     // 8. Reload: still paired (key from IndexedDB, fresh handshake).
     await page.reload();
     await page.getByTestId('status').getByText('Connected').waitFor({ timeout: 15000 });
-    await page.getByTestId('balance').getByText('11.44').waitFor({ timeout: 10000 });
+    // 11.44, plus the 0.50 ECX of notes redeemed in 6c.
+    await page.getByTestId('balance').getByText('11.94').waitFor({ timeout: 10000 });
     check('reload keeps the pairing', true);
 
     // Light theme.

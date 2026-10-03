@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { PhoneClient, DeniedError, LostError, HELD_EXPIRED, randomStartId, type Identity } from './api';
-import { createSendFlow } from './sendflow';
+import { createPaymentFlow } from './sendflow';
 import { OfflineError, type Transport } from './relay';
 import { b64u, exportPub, genKeyPair } from './crypto';
 // @ts-ignore -- plain JS test helper
@@ -328,7 +328,7 @@ describe('send flow', () => {
     const desk = await MockDesktop.create({ locked: true, holdDelayMs: 80 });
     client = new PhoneClient(await pairedPhone(desk), new FakeRelay(desk).connect, fast);
     client.start();
-    const flow = createSendFlow();
+    const flow = createPaymentFlow();
     const seen: string[] = [];
     const un = flow.subscribe((s) => seen.push(s.k === 'held' ? `held:${s.why}` : s.k));
     await flow.start(client, 'Xabc', 0.01);
@@ -340,15 +340,127 @@ describe('send flow', () => {
     const desk = await MockDesktop.create({ holdDecision: 'none' });
     client = new PhoneClient(await pairedPhone(desk), new FakeRelay(desk).connect, { ...fast, heldTimeoutMs: 100 });
     client.start();
-    const flow = createSendFlow();
+    const flow = createPaymentFlow();
     await flow.start(client, 'Xabc', 1);
     expect(get(flow)).toMatchObject({ k: 'error', unsure: true, msg: HELD_EXPIRED });
 
     const desk2 = await MockDesktop.create({ holdDecision: 'deny', holdDelayMs: 30 });
     client2 = new PhoneClient(await pairedPhone(desk2), new FakeRelay(desk2).connect, fast);
     client2.start();
-    const flow2 = createSendFlow();
+    const flow2 = createPaymentFlow();
     await flow2.start(client2, 'Xabc', 1);
     expect(get(flow2)).toMatchObject({ k: 'error', unsure: false, msg: DECLINED });
   });
 });
+
+describe('notes and houses (desktop v0.2.5)', () => {
+  it('reads notes and houses; note actions carry the house, and an address only when sending', async () => {
+    const desk = await MockDesktop.create({ limit: 1 });
+    client = new PhoneClient(await pairedPhone(desk), new FakeRelay(desk).connect, fast);
+    client.start();
+    expect((await client.nodeStatus()).credit).toBe(true);
+    const notes = await client.notes();
+    expect(notes.map((n) => [n.house, n.state_name])).toEqual([[3, 'Open'], [4, 'Suspended']]);
+    expect((await client.houses())[1]).toMatchObject({ house: 4, ratio_bps: 6000 });
+
+    await client.pay({ kind: 'note-send', house: 3, address: 'Xabc', amount: 0.1 });
+    expect(lastRequest(desk, 'note-send').a).toEqual({ amount: 0.1, address: 'Xabc', house: 3 });
+    await client.pay({ kind: 'note-redeem', house: 3, address: 'ignored', amount: 0.1 });
+    expect(lastRequest(desk, 'note-redeem').a).toEqual({ amount: 0.1, house: 3 });
+    await client.pay({ kind: 'note-demand', house: 4, address: '', amount: 0.05 });
+    expect(lastRequest(desk, 'note-demand').a).toEqual({ amount: 0.05, house: 4 });
+    expect(desk.wallet.notes.find((n: any) => n.house === 4)!.demanded).toBe(0.1);
+  });
+
+  it('a note action over the limit waits for the desktop, like a send', async () => {
+    const desk = await MockDesktop.create({ holdDelayMs: 50 });
+    client = new PhoneClient(await pairedPhone(desk), new FakeRelay(desk).connect, fast);
+    client.start();
+    const flow = createPaymentFlow();
+    const seen: string[] = [];
+    const un = flow.subscribe((s) => seen.push(s.k === 'held' ? `held:${s.why}` : s.k));
+    await flow.pay(client, { kind: 'note-redeem', house: 3, address: '', amount: 0.3 });
+    un();
+    expect(seen).toEqual(['form', 'sending', 'held:limit', 'done']);
+    expect(get(flow)).toMatchObject({ k: 'done', kind: 'note-redeem', house: 3, wasHeld: true });
+    expect(desk.wallet.notes.find((n: any) => n.house === 3)!.amount).toBe(0.2);
+  });
+
+  it('an older desktop has no credit', async () => {
+    const desk = await MockDesktop.create({ credit: false });
+    client = new PhoneClient(await pairedPhone(desk), new FakeRelay(desk).connect, fast);
+    client.start();
+    expect((await client.nodeStatus()).credit).toBeUndefined();
+    await expect(client.notes()).rejects.toThrow('unknown method');
+  });
+});
+
+describe('approve on my phone (desktop v0.2.5)', () => {
+  it('an approval asked is listed; declining answers and clears it; one the desktop ends goes too', async () => {
+    const desk = await MockDesktop.create();
+    client = new PhoneClient(await pairedPhone(desk), new FakeRelay(desk).connect, fast);
+    client.start();
+    await client.nodeStatus();
+    const id = desk.askApproval({ what: 'send', amount: 2.5, address: 'Xabc', text: null });
+    await until(() => get(client!.approvals).length === 1);
+    expect(get(client.approvals)[0]).toMatchObject({ id, what: 'send', amount: 2.5, address: 'Xabc', cred: 'Y3JlZC1pZA' });
+    await client.decline(id);
+    expect(desk.approvals.get(id).answer).toBe('declined');
+    expect(get(client.approvals)).toEqual([]);
+
+    const id2 = desk.askApproval({ what: 'change', amount: null, address: '', text: 'Turn it off' });
+    await until(() => get(client!.approvals).length === 1);
+    desk.endApproval(id2);
+    await until(() => get(client!.approvals).length === 0);
+  });
+
+  it('approving sends the Face ID proof over the approval', async () => {
+    const desk = await MockDesktop.create();
+    client = new PhoneClient(await pairedPhone(desk), new FakeRelay(desk).connect, fast);
+    client.start();
+    await client.nodeStatus();
+    const id = desk.askApproval({ what: 'send', amount: 1, address: 'Xabc', text: null });
+    await until(() => get(client!.approvals).length === 1);
+    await client.approve(id, { ad: 'YQ', cdj: 'Yg', sig: 'Yw' });
+    expect(desk.approvals.get(id)).toMatchObject({ answer: 'approved', auth: { ad: 'YQ', cdj: 'Yg', sig: 'Yw' } });
+  });
+
+  it('counts the time left from when it arrives, not by the desktop clock', async () => {
+    const desk = await MockDesktop.create();
+    client = new PhoneClient(await pairedPhone(desk), new FakeRelay(desk).connect, fast);
+    client.start();
+    await client.nodeStatus();
+    // The desktop's clock is ten minutes ahead: its `expires` is far off, its `secs` right.
+    desk.askApproval({ what: 'send', amount: 1, address: 'Xabc', text: null }, 120, 600);
+    await until(() => get(client!.approvals).length === 1);
+    const left = get(client.approvals)[0].deadline - Date.now();
+    expect(left).toBeGreaterThan(110_000);
+    expect(left).toBeLessThanOrEqual(120_000);
+  });
+
+  it('an answer the desktop no longer waits for, "Not now" and a new session clear the card', async () => {
+    const desk = await MockDesktop.create();
+    const relay = new FakeRelay(desk);
+    client = new PhoneClient(await pairedPhone(desk), relay.connect, fast);
+    client.start();
+    await client.nodeStatus();
+    const id = desk.askApproval({ what: 'send', amount: 1, address: 'Xabc', text: null });
+    await until(() => get(client!.approvals).length === 1);
+    desk.approvals.delete(id); // "approve-done" lost on the way
+    await client.decline(id);
+    expect(get(client.approvals)).toEqual([]);
+    const id2 = desk.askApproval({ what: 'scheduled', amount: null, address: '', text: 'x' }, 86_400);
+    await until(() => get(client!.approvals).length === 1);
+    client.dismiss(id2);
+    expect(get(client.approvals)).toEqual([]);
+    desk.askApproval({ what: 'change', amount: null, address: '', text: 'y' });
+    await until(() => get(client!.approvals).length === 1);
+    // The connection drops and comes back: the list starts again with the new session (the desktop tells it again
+    // whatever it still waits for).
+    relay.dropAll();
+    await until(() => client!.current !== 'connected');
+    await until(() => client!.current === 'connected');
+    expect(get(client.approvals)).toEqual([]);
+  });
+});
+

@@ -53,7 +53,9 @@ export class MockDesktop {
     this.holdDelayMs = opts.holdDelayMs ?? 1500;
     this.holdExpiryMs = opts.holdExpiryMs ?? 10 * 60_000;
     this.locked = opts.locked ?? false;
+    this.credit = opts.credit ?? true; // desktop v0.2.5: notes, houses and the note actions
     this.held = new Map(); // confirm id -> { id, dev, amount, address, at, why, cancelled, timer, expiry }
+    this.approvals = new Map(); // approval id -> { msg, answer: null | 'approved' | 'declined', auth }
     this.requests = []; // every request the narrow door opened: { id, m, a }
     this.intercept = null; // tests: (req, chan) => true leaves a request unanswered
     this.log = [];
@@ -67,6 +69,19 @@ export class MockDesktop {
         { txid: hex(rand(32)), category: 'receive', amount: 10, confirmations: 42, time: 1759000000, address: fakeAddress() },
         { txid: hex(rand(32)), category: 'send', amount: -1.5, confirmations: 120, time: 1758900000, address: fakeAddress() },
         { txid: hex(rand(32)), category: 'receive', amount: 4, confirmations: 300, time: 1758800000, address: fakeAddress() },
+      ],
+      // Notes by house (desktop v0.2.5): house 3 open, house 4 suspended with some notes under demand.
+      notes: [
+        { house: 3, name: 'Bank of Leith', state: 'o', state_name: 'Open', amount: 0.5, demanded: 0, redeemable: 0.5,
+          can_redeem: true, can_demand: true, rate_bps: 1000 },
+        { house: 4, name: 'Ayr Bank', state: 'd', state_name: 'Suspended', amount: 0.2, demanded: 0.05, redeemable: 0.05,
+          can_redeem: true, can_demand: true, rate_bps: 1000 },
+      ],
+      houses: [
+        { house: 3, name: 'Bank of Leith', state: 'o', state_name: 'Open', ratio_bps: 12500, outstanding: 0.9,
+          reserves: 1.2, attested_at: 1200, rate_bps: 1000 },
+        { house: 4, name: 'Ayr Bank', state: 'd', state_name: 'Suspended', ratio_bps: 6000, outstanding: 0.4,
+          reserves: 0.24, attested_at: 1100, rate_bps: 1000 },
       ],
     };
   }
@@ -224,11 +239,27 @@ export class MockDesktop {
     return n;
   }
 
-  pay(amount, address) {
+  /** Pay `h` ({kind, house, amount, address}): ECX out, or a house's notes sent, redeemed or demanded. */
+  pay(h) {
     const w = this.wallet;
     const txid = hex(rand(32));
-    w.confirmed -= amount;
-    w.txs.unshift({ txid, category: 'send', amount: -amount, confirmations: 0, time: Math.floor(Date.now() / 1000), address });
+    const kind = h.kind ?? 'send';
+    const n = w.notes.find((x) => x.house === h.house);
+    const round = (v) => Math.round(v * 1e8) / 1e8;
+    if (kind === 'send') {
+      w.confirmed -= h.amount;
+      w.txs.unshift({ txid, category: 'send', amount: -h.amount, confirmations: 0, time: Math.floor(Date.now() / 1000), address: h.address });
+    } else if (kind === 'note-send') {
+      n.amount = round(n.amount - h.amount);
+    } else if (kind === 'note-redeem') {
+      n.amount = round(n.amount - h.amount);
+      n.redeemable = round(n.redeemable - h.amount);
+      if (n.state === 'd') n.demanded = round(n.demanded - h.amount);
+      w.confirmed += h.amount;
+    } else if (kind === 'note-demand') {
+      n.demanded = round(n.demanded + h.amount);
+      if (n.state === 'd') n.redeemable = round(n.redeemable + h.amount);
+    }
     return txid;
   }
 
@@ -240,11 +271,28 @@ export class MockDesktop {
     clearTimeout(h.timer);
     clearTimeout(h.expiry);
     const final = allow
-      ? { id: h.id, pending: confirmId, ok: { txid: this.pay(h.amount, h.address) } }
+      ? { id: h.id, pending: confirmId, ok: { txid: this.pay(h) } }
       : { id: h.id, pending: confirmId, err: DECLINED };
     this.log.push(`send: ${allow ? 'confirmed' : 'declined'} ${confirmId}`);
     this.toDevice(h.dev, final);
     return true;
+  }
+
+  /** Ask every paired phone to approve something (desktop v0.2.5). `what`: {what, amount, address, text}. `clockSkew`:
+   * seconds this desktop's clock is ahead of the phone's (the page counts from `secs`, not `expires`). */
+  askApproval(what, secs = 120, clockSkew = 0) {
+    const id = 'a' + hex(rand(8));
+    const expires = Math.floor(Date.now() / 1000) + clockSkew + secs;
+    const msg = { approve: { id, ...what, challenge: b64u(rand(32)), cred: 'Y3JlZC1pZA', expires, secs } };
+    this.approvals.set(id, { msg, answer: null, auth: null });
+    for (const dev of this.devices.values()) this.toDevice(dev, msg);
+    return id;
+  }
+
+  /** Stop waiting for approval `id`: the phones' cards go. */
+  endApproval(id) {
+    this.approvals.delete(id);
+    for (const dev of this.devices.values()) this.toDevice(dev, { 'approve-done': id });
   }
 
   /** Forget a held send without a final reply (the phone was revoked). */
@@ -281,20 +329,45 @@ export class MockDesktop {
       case 'receive':
         return ok({ address: fakeAddress() });
       case 'status':
-        return ok({ blocks: w.blocks, synced: true, limit_left: Math.round(w.limitLeft * 1e8) / 1e8 });
-      case 'send': {
-        const { address, amount } = req.a ?? {};
-        if (typeof address !== 'string' || !address.startsWith('X')) return err('Invalid address');
+        return ok({ blocks: w.blocks, synced: true, limit_left: Math.round(w.limitLeft * 1e8) / 1e8, ...(this.credit ? { credit: true } : {}) });
+      case 'approve': {
+        const a = this.approvals.get(req.a?.id);
+        if (!a || a.answer) return err('That approval is no longer waiting.');
+        if (req.a.decline === true) a.answer = 'declined';
+        else if (req.a.auth && typeof req.a.auth.sig === 'string') {
+          a.answer = 'approved';
+          a.auth = req.a.auth;
+        } else return err("Face ID didn't check out. Try again.");
+        return ok({});
+      }
+      case 'notes':
+        return this.credit ? ok(w.notes.filter((n) => n.amount > 0)) : err('unknown method');
+      case 'houses':
+        return this.credit ? ok(w.houses) : err('unknown method');
+      case 'send':
+      case 'note-send':
+      case 'note-redeem':
+      case 'note-demand': {
+        if (req.m !== 'send' && !this.credit) return err('unknown method');
+        const { address, amount, house } = req.a ?? {};
+        const needsAddress = req.m === 'send' || req.m === 'note-send';
+        if (needsAddress && (typeof address !== 'string' || !address.startsWith('X'))) return err('Invalid address');
         if (typeof amount !== 'number' || !(amount > 0)) return err('Invalid amount');
-        if (amount > w.confirmed) return err('Insufficient funds');
-        const within = amount <= w.limitLeft + 1e-12;
+        if (req.m === 'send' && amount > w.confirmed) return err('Insufficient funds');
+        const n = w.notes.find((x) => x.house === house);
+        if (req.m !== 'send' && !n) return err('No notes of that house');
+        if (req.m === 'note-redeem' && amount > n.redeemable + 1e-12) return err('More than can be redeemed now');
+        const p = { kind: req.m, house, amount, address: needsAddress ? address : '' };
+        // A note action's fee and carriers count against the limit too (desktop v0.2.5).
+        const cost = req.m === 'send' ? amount : amount + 0.00102;
+        const within = cost <= w.limitLeft + 1e-12;
         if (within && !this.locked) {
-          w.limitLeft -= amount;
-          return ok({ txid: this.pay(amount, address) });
+          w.limitLeft -= cost;
+          return ok({ txid: this.pay(p) });
         }
         const why = within ? 'locked' : 'limit';
         const confirmId = 'c' + hex(rand(8));
-        const h = { id: req.id, dev: chan.device, amount, address, at: Date.now(), why, cancelled: false, timer: null, expiry: null };
+        const h = { id: req.id, dev: chan.device, ...p, at: Date.now(), why, cancelled: false, timer: null, expiry: null };
         this.held.set(confirmId, h);
         this.log.push(`send: held ${confirmId} (${why})`);
         await ok({ pending: confirmId, why });

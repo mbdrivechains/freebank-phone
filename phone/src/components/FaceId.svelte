@@ -53,6 +53,22 @@
     await load();
   });
 
+  // With "Approve sends on my phone" on, this phone's first Face ID would let it approve the desktop's payments, so
+  // another phone with Face ID says yes first (desktop v0.2.5). Asking starts that; the answer says so.
+  let askNote = '';
+  async function askOther() {
+    busy = true;
+    error = '';
+    askNote = '';
+    try {
+      await client.authStart('add');
+    } catch (e) {
+      askNote = (e as Error).message;
+    }
+    busy = false;
+    await load();
+  }
+
   async function make() {
     busy = true;
     error = '';
@@ -134,7 +150,14 @@
       it on in each.
     </p>
     <label class="check"><input type="checkbox" bind:checked={sends} disabled={!!made} /> Also before each send</label>
-    {#if !made}
+    {#if st.add_asks && !made}
+      <p class="small">
+        "Approve sends on my phone" is on, so your other phone with Face ID approves this first: with Face ID on, this
+        phone could approve your desktop's payments too.
+      </p>
+      <button class="primary full" on:click={askOther} disabled={busy}>Ask my other phone</button>
+      {#if askNote}<p class="small" data-testid="faceid-asked">{askNote}</p>{/if}
+    {:else if !made}
       <button class="primary full" on:click={make} disabled={busy}>{busy ? 'Making your passkey…' : 'Turn on Face ID'}</button>
     {:else}
       <p class="small">Passkey made. Now confirm it once.</p>

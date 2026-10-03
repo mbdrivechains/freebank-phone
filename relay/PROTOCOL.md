@@ -97,7 +97,8 @@ The plaintext is `{"id":<int>,"m":"<method>","a":{...}}`. The reply is `{"id":<i
   - every send is shown and logged on the desktop.
 - **A held send** gets its final reply later, under the same `id`: `{"id","ok":{"txid"}}` once confirmed, or
   `{"id","err":"declined on the desktop"}`. The phone keeps the request open until then.
-- **Nothing else is reachable:** no raw RPC, no notes, houses or keys. Amounts are in ECX only.
+- **Nothing else is reachable:** no raw RPC and no keys. House notes come with desktop v0.2.5 (below). Amounts are in
+  ECX only.
 
 ## The relay
 
@@ -286,13 +287,120 @@ link to the relay is up, but the node starts only when a paired phone asks for s
 a phone with a passkey, Face ID have checked out. Never on a bare connection to the relay, a pair request, or a
 removed phone.
 
-While the node starts, a request that needs it (`balance`, `history`, `receive`, `status`, `send`) is answered
+While the node starts, a request that needs it (`balance`, `history`, `receive`, `status`, `send`, and from v0.2.5
+`notes`, `houses`, `note-send`, `note-redeem`, `note-demand`) is answered
 `{"id","err":"<message>","starting":true}`, the request that woke it included; so is one that finds the node gone
 later (it is woken again). A wake waits up to 10 minutes for the node. If the node can't start, or stops while
 starting, such requests are answered with a plain error saying to open FreeBank on the desktop, and the next try
 waits two minutes. The page's Home screen shows that the desktop is starting and asks again every 10 seconds, for
 5 minutes at most; other screens show the error. While the desktop app stays closed, a node started this way stops
 again after 30 minutes with no phone asking. Nothing changes for the relay.
+
+## House notes (app v0.2.5)
+
+A desktop that answers these says so: `status` carries `"credit": true`. An older desktop answers them
+`"unknown method"`, and the page shows no Notes.
+
+| Method | Args | Result | Desktop calls |
+|---|---|---|---|
+| `notes` | — | a list of `{house, name, state, state_name, amount, demanded, redeemable, can_redeem, can_demand, rate_bps}` | `listmynotes`, `listhouses` |
+| `houses` | — | a list of `{house, name, state, state_name, ratio_bps, outstanding, reserves, attested_at, rate_bps}` | `listhouses` |
+| `note-send` | `{"house","address","amount"}` | as `send` | `transfernote` |
+| `note-redeem` | `{"house","amount"}` | as `send` | `redeemnote` |
+| `note-demand` | `{"house","amount"}` | as `send` | `demandnote` |
+
+- **Amounts** are ECX: one note unit is one sat, as on the desktop's Notes tab. `state` is the house's state by letter
+  (`o` open, `s` stressed, `d` suspended, `i` insolvent, `w` wound down) and `state_name` its name; `rate_bps` is the
+  yearly rate on demands queued while a house is suspended (1000 = 10%). `redeemable` is what can be redeemed now
+  (while suspended, only notes under demand).
+- **The note actions take the send's guard:** Face ID before each one when the phone chose it (`a.auth`, over a
+  `for:"send"` challenge); the same daily limit, counted in ECX; held for the desktop above it (or with the wallet
+  locked), with the same held and final replies; refused at once with the desktop app closed. The desktop pays them
+  with the Notes tab's fee, 0.001 ECX. A redeem or a demand needs one holder's coins summing exactly to the amount;
+  when the node refuses one for that, the error says to send the notes to one of the owner's own addresses first.
+- **`notes` needs the wallet unlocked:** freebankd lists a wallet's notes only then. The desktop unlocks it for a moment
+  with the phone-send passphrase (as for a send) and locks it again; without that passphrase the phone hears to turn
+  on "Let my phone send while FreeBank is open" on the desktop.
+- On the desktop, a held note action reads "<phone> wants to redeem 0.5 ECX of house #3's notes", with Redeem or
+  Demand as its button, and the phone payments list names it the same way.
+
+## Approve on my phone (app v0.2.5)
+
+"Approve sends on my phone", off unless the owner turns it on in desktop Settings > Phone. Reworked after the v0.2.5
+security review (operator 2026-10-03: "yes to that").
+
+**What it asks for:**
+- **The desktop's payments.** Once those in the last 24 hours would come to more than the amount, the next one waits
+  for a paired phone with Face ID. Approved payments don't count; payments that didn't go out give their count back.
+  A locked wallet is unlocked first, so nothing is asked or counted before the passphrase. Every way the app pays
+  counts, with its fee:
+  - Send, and Speed up's extra fee;
+  - the credit tabs' calls that sign (notes, bills, pools, houses; a house's pledges count);
+  - a phone's held payment confirmed on the desktop, unless that phone's own Face ID signed it (`for:"send"`). A held
+    send counts 0.001 ECX for the fee the node will choose.
+- **What would get round it:**
+  - turning it off, or a higher amount;
+  - a higher daily limit for a phone (within it, that phone pays without the desktop);
+  - pairing another phone (the ask shows its comparison code);
+  - a paired phone's first Face ID (that would make it an approver, below), and the desktop's "Remove Face ID";
+  - showing the recovery words or the master key (xprv) on the desktop;
+  - a new wallet, new recovery words, or a restore from a backup file (new words would answer the recovery words'
+    path);
+  - Obliterate (it removes the phone link's settings, and the wallet may stay).
+
+**The recovery words.** For a lost phone, the wallet's 24 recovery words on the desktop can turn it off or raise the
+amount instead.
+- The words must make the node wallet's key (`hdmasterkeyid`) and match FreeBank's sealed copy of them. Turning it on
+  needs that copy.
+- The change waits a day, and every phone that can approve gets a `"scheduled"` ask (below): its Face ID makes the change
+  at once, and a decline cancels it. The desktop can cancel it too, and a stronger setting replaces it.
+
+Revoking a phone needs nothing, nor does a phone turning its own Face ID off (that takes its own Face ID). The desktop
+warns before it removes the last phone that can approve: with none, nobody can cancel the recovery words' change.
+
+**The ask** has no `id`, as it isn't a reply:
+`{"approve": {"id", "what": "send"|"action"|"change"|"scheduled", "amount", "address", "text", "challenge": "<b64u 32
+bytes>", "cred", "expires", "secs"}}`
+- **Who hears it:** every live session of each phone with a passkey, once that session has passed Face ID (`auth`).
+  Someone holding the unlocked phone without Face ID sees nothing. A session that passes `auth` later hears every ask
+  still waiting for it.
+- **The fields:**
+  - `amount` and `address` are a send's;
+  - `"action"` is another payment, with `text` saying what it is and `amount` what it costs, fees included;
+  - `"change"` has `text`;
+  - `"scheduled"` has `amount`, the new amount (null for off), and `text`.
+- **The time:** `secs` is the time left, and the page counts from when it arrives (its clock may differ). `expires` is
+  the desktop's own clock. The day's total and the recovery words' day follow the desktop's clock too.
+- **`cred`** is that phone's passkey id.
+
+**The answer** is a request, `approve`, with the reply `{}`:
+- **Approve:** `{"id", "auth": {"ad","cdj","sig"}}`, Face ID over `challenge`. It carries its own Face ID. The desktop
+  checks the assertion as for `auth` (origin, rp id, UP and UV, the signature, the counter) against that phone's stored
+  key and that ask's challenge. One that fails is refused, and the ask keeps waiting.
+- **Decline:** `{"id", "decline": true}`, accepted only from a session that passed Face ID.
+- A `"scheduled"` card answers only the change it showed: once that change is replaced, it is gone.
+- An ask that is gone answers "That approval is no longer waiting."
+
+**The end:** the first good answer settles it, and the desktop sends `{"approve-done": "<id>"}` to the phones'
+sessions.
+- The desktop waits 2 minutes for a payment or a change (a day for `"scheduled"`), and its owner can cancel.
+- The page drops a card on `approve-done`, on any answer, once its time is up, and on "Not now" (until the next
+  session). It starts each session with no cards: the desktop tells it again whatever still waits.
+
+**A first Face ID.** While it is on, `status` carries `"add_asks": true` for a phone without a passkey.
+- That phone's `auth-start` with `for:"add"` (and its `passkey-add`) answers an error saying the other phone is asked.
+  The desktop then asks the phones with Face ID, once at a time: "Let <name> approve the desktop's payments too".
+- The ask says when that phone was paired and last seen. Approved, that phone may add its passkey within 10 minutes;
+  declined or unanswered, it can ask again after 10 minutes.
+- With no phone left that can approve, the answer says to turn the setting off first.
+
+**What it guards:** FreeBank, not the node. Someone with the computer and the wallet passphrase could still use the
+node directly, copy the wallet, or change FreeBank's files or the computer's clock. A phone still pays within its own
+daily limit without the desktop. The desktop's Settings say so. A phone link that failed to start while the setting
+is on refuses payments rather than letting them through.
+
+**Note actions on the phone** count their fee and up to two 1000-sat carrier outputs against the phone's daily limit
+(0.00102 ECX each), as well as the notes.
 
 ## Not in protocol v1
 

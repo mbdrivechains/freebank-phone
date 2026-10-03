@@ -144,7 +144,7 @@
       <div class="big">{fmtEcx(amount ?? 0)} <span class="unit">ECX</span></div>
       <div><div class="muted small">To</div><div class="mono wrap">{address}</div></div>
       {#if overLimit}
-        <p class="small warnbox">This is more than today's limit. Your desktop will ask you to approve it.</p>
+        <p class="small warnbox">This is more than today's limit, so it waits for you to confirm it on your desktop.</p>
       {/if}
     </div>
     <button class="primary full" on:click={send} disabled={status !== 'connected' || checkingFaceId || (faceIdSends && !sendCh)}
@@ -174,7 +174,7 @@
         <div class="mono wrap" data-testid="receipt-txid">{$sendFlow.txid}</div>
       </div>
       <Copy text={$sendFlow.txid} label="Copy ID" />
-      {#if $sendFlow.wasHeld}<p class="muted small">Approved on your desktop.</p>{/if}
+      {#if $sendFlow.wasHeld}<p class="muted small">Confirmed on your desktop.</p>{/if}
     </div>
     <button class="primary full" on:click={() => { newPayment(); dispatch('back'); }}>Done</button>
   {:else if $sendFlow.k === 'error'}

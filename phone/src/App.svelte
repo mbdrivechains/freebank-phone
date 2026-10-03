@@ -1,22 +1,26 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { PhoneClient, type Status } from './lib/api';
+  import { PhoneClient, type ApprovalAsk, type NoteHolding, type PaymentKind, type Status } from './lib/api';
   import { RelayLink } from './lib/relay';
   import { loadPairing, forgetPairing, type Pairing } from './lib/store';
-  import { sendFlow } from './lib/sendflow';
+  import { noteFlow, sendFlow } from './lib/sendflow';
   import { takePairFragment } from './lib/fragment';
   import Pair from './components/Pair.svelte';
   import Home from './components/Home.svelte';
   import Receive from './components/Receive.svelte';
   import Send from './components/Send.svelte';
   import Settings from './components/Settings.svelte';
+  import Notes from './components/Notes.svelte';
+  import Houses from './components/Houses.svelte';
+  import NoteAction from './components/NoteAction.svelte';
+  import Approve from './components/Approve.svelte';
   import HomeScreenHint from './components/HomeScreenHint.svelte';
   import Report from './components/Report.svelte';
   import Lock from './components/Lock.svelte';
 
   export let pairValue: string | null = null;
 
-  type Screen = 'loading' | 'pair' | 'home' | 'receive' | 'send' | 'settings';
+  type Screen = 'loading' | 'pair' | 'home' | 'receive' | 'send' | 'settings' | 'notes' | 'houses' | 'note';
   let screen: Screen = 'loading';
   let pairing: Pairing | null = null;
   let client: PhoneClient | null = null;
@@ -26,7 +30,12 @@
   let locked = false;
   let unlocks = 0;
   let unsubLocked: (() => void) | null = null;
+  // Approvals the desktop asks for (desktop v0.2.5): shown over any screen, Face ID screen included.
+  let approvals: ApprovalAsk[] = [];
+  let unsubApprovals: (() => void) | null = null;
   let loadError = '';
+  // The note action on screen (desktop v0.2.5): which house's notes, and send, redeem or demand.
+  let noteAct: { holding: NoteHolding; kind: PaymentKind } | null = null;
   // "Report a problem or suggest something", from the footer on any screen.
   let reporting = false;
 
@@ -39,6 +48,7 @@
       if (locked && !l) unlocks++;
       locked = l;
     });
+    unsubApprovals = client.approvals.subscribe((l) => (approvals = l));
     client.start();
   }
 
@@ -47,6 +57,9 @@
     unsub = null;
     unsubLocked?.();
     unsubLocked = null;
+    unsubApprovals?.();
+    unsubApprovals = null;
+    approvals = [];
     locked = false;
     client?.stop();
     client = null;
@@ -81,6 +94,8 @@
   function onPop(e: PopStateEvent) {
     if (!pairing) return;
     screen = (e.state?.screen as Screen) ?? 'home';
+    // A note action's screen needs its house; without it (a reload), back to Notes.
+    if (screen === 'note' && !noteAct) screen = 'notes';
   }
 
   // A pairing link opened while the page is already open (same document, only the hash changes).
@@ -110,6 +125,7 @@
     stopClient();
     await forgetPairing();
     sendFlow.reset();
+    noteFlow.reset();
     pairing = null;
     history.replaceState(null, '');
     screen = 'pair';
@@ -169,7 +185,7 @@
 {:else if client && pairing}
   {#key unlocks}
   {#if screen === 'home'}
-    <Home {client} {status} on:receive={() => go('receive')} on:send={() => go('send')} />
+    <Home {client} {status} on:receive={() => go('receive')} on:send={() => go('send')} on:notes={() => go('notes')} />
     <HomeScreenHint paired />
   {:else if screen === 'receive'}
     <Receive {client} {status} on:back={() => go('home')} />
@@ -177,7 +193,20 @@
     <Send {client} {status} on:back={() => go('home')} />
   {:else if screen === 'settings'}
     <Settings {pairing} {client} {locked} on:back={() => go('home')} on:forget={forget} />
+  {:else if screen === 'notes'}
+    <Notes {client} {status} on:back={() => go('home')} on:houses={() => go('houses')}
+      on:act={(e) => { noteAct = e.detail; go('note'); }} />
+  {:else if screen === 'houses'}
+    <Houses {client} {status} on:back={() => go('notes')} />
+  {:else if screen === 'note' && noteAct}
+    <NoteAction {client} {status} holding={noteAct.holding} kind={noteAct.kind} on:back={() => go('notes')} />
   {/if}
+  {/key}
+{/if}
+
+{#if client && pairing && approvals.length && screen !== 'pair' && status !== 'denied'}
+  {#key approvals[0].id}
+    <Approve {client} ask={approvals[0]} />
   {/key}
 {/if}
 

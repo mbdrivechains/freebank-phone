@@ -2,7 +2,7 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { StartingError, type Balance, type NodeStatus, type PhoneClient, type Status, type Tx } from '../lib/api';
   import { fmtEcx, fmtTime, categoryLabel, shortId } from '../lib/format';
-  import { sendFlow } from '../lib/sendflow';
+  import { noteFlow, sendFlow } from '../lib/sendflow';
   import Copy from './Copy.svelte';
 
   export let client: PhoneClient;
@@ -108,6 +108,11 @@
       <span class="spinner"></span> A payment of {fmtEcx($sendFlow.amount)} ECX is waiting for your desktop{$sendFlow.k === 'held' && $sendFlow.why === 'locked' ? ' (its wallet is locked)' : ''}
     </button>
   {/if}
+  {#if $noteFlow.k === 'held' || $noteFlow.k === 'sending'}
+    <button class="banner full" on:click={() => dispatch('notes')}>
+      <span class="spinner"></span> {fmtEcx($noteFlow.amount)} ECX of notes are waiting for your desktop
+    </button>
+  {/if}
 
   <div class="card balance">
     <div class="label">Balance</div>
@@ -130,6 +135,9 @@
     <button class="primary" on:click={() => dispatch('receive')}>Receive</button>
     <button class="primary" on:click={() => dispatch('send')}>Send</button>
   </div>
+  {#if node?.credit}
+    <button class="full" data-testid="open-notes" on:click={() => dispatch('notes')}>Notes and houses</button>
+  {/if}
 
   <div class="head">
     <h3>Recent activity</h3>
