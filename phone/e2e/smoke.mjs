@@ -371,6 +371,27 @@ async function runEngine(name) {
     check('tx expands with txid', txid === desk.wallet.txs[0].txid);
     await shot(page, 'home-tx-open');
 
+    // 3b. Daemon mode (app v0.2.4): the desktop answers "starting" while its node starts; the page says so and asks
+    // again by itself (mock desktop only).
+    if (!REAL) {
+      let left = 3;
+      desk.intercept = (req, chan) => {
+        if (left > 0 && ['balance', 'history', 'status'].includes(req.m)) {
+          left--;
+          desk.reply(chan, { id: req.id, err: 'Your desktop is starting FreeBank. It answers in a minute or two.', starting: true });
+          return true;
+        }
+        return false;
+      };
+      await page.getByRole('button', { name: 'Refresh' }).click();
+      await page.getByTestId('starting').waitFor({ timeout: 10000 });
+      await shot(page, 'home-starting');
+      await page.getByTestId('starting').waitFor({ state: 'detached', timeout: 25000 });
+      check('daemon mode: "starting" shown, then the balance again without a tap',
+        (await page.getByTestId('balance').textContent()).includes('12.50') && left === 0);
+      desk.intercept = null;
+    }
+
     // Key is stored and non-extractable.
     const keyCheck = await page.evaluate(() => new Promise((res) => {
       const r = indexedDB.open('freebank-phone');

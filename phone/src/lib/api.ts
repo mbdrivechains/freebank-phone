@@ -55,6 +55,8 @@ export class DeniedError extends Error {
 export class LostError extends Error {}
 /** The desktop wants Face ID before it answers this session (relay/PROTOCOL.md, "Face ID: passkeys"). */
 export class LockedError extends Error {}
+/** Daemon mode: the desktop is starting its node because this phone asked (relay/PROTOCOL.md, "Wake on demand"). */
+export class StartingError extends Error {}
 export class NotConnectedError extends Error {
   constructor() {
     super('Your desktop is not reachable right now.');
@@ -321,7 +323,8 @@ export class PhoneClient {
       if (msg.auth === 'open') {
         this._locked.set(true);
         p.reject(new LockedError(String(msg.err)));
-      } else p.reject(new Error(String(msg.err)));
+      } else if (msg.starting === true) p.reject(new StartingError(String(msg.err)));
+      else p.reject(new Error(String(msg.err)));
     } else if (!p.held && p.method === 'send' && isHeldReply(msg.ok)) {
       const confirmId = msg.ok.pending;
       if (typeof confirmId !== 'string' || !confirmId) {

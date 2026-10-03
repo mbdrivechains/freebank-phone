@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
-  import type { Balance, NodeStatus, PhoneClient, Status, Tx } from '../lib/api';
+  import { StartingError, type Balance, type NodeStatus, type PhoneClient, type Status, type Tx } from '../lib/api';
   import { fmtEcx, fmtTime, categoryLabel, shortId } from '../lib/format';
   import { sendFlow } from '../lib/sendflow';
   import Copy from './Copy.svelte';
@@ -16,6 +16,13 @@
   let node: NodeStatus | null = cache.node;
   let loading = false;
   let error = '';
+  // Daemon mode: the desktop is starting its node because this phone asked; ask again every 10 s until it answers,
+  // for 5 minutes at most (the retries count as use, which keeps an unlocked phone unlocked), and only on this screen.
+  let starting = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let retries = 0;
+  let destroyed = false;
+  const MAX_RETRIES = 30;
   let open: string | null = null;
 
   async function refresh() {
@@ -27,12 +34,27 @@
       balance = cache.balance = b;
       txs = cache.txs = Array.isArray(h) ? h.slice(0, 10) : [];
       node = cache.node = s;
+      starting = false;
+      retries = 0;
     } catch (e) {
-      error = (e as Error).message;
+      clearTimeout(retry);
+      if (e instanceof StartingError && retries < MAX_RETRIES) {
+        starting = true;
+        retries++;
+        if (!destroyed) retry = setTimeout(refresh, 10_000);
+      } else {
+        starting = false;
+        retries = 0;
+        error = e instanceof StartingError ? 'Your desktop is still starting FreeBank. Tap ↻ to check again.' : (e as Error).message;
+      }
     } finally {
       loading = false;
     }
   }
+  onDestroy(() => {
+    destroyed = true;
+    clearTimeout(retry);
+  });
 
   // Refresh whenever a session comes up (first connect, reconnect, page shown again).
   let last: Status | null = null;
@@ -116,6 +138,13 @@
     </button>
   </div>
 
+  {#if starting}
+    <div class="card stack center" data-testid="starting">
+      <span class="spinner"></span>
+      <p><strong>Your desktop is starting FreeBank.</strong></p>
+      <p class="muted small">It started when this phone asked, and answers in a minute or two. This page keeps trying.</p>
+    </div>
+  {/if}
   {#if error}
     <p class="error small">{error}</p>
   {/if}
@@ -150,7 +179,7 @@
     </ul>
   {:else if status !== 'connected'}
     <p class="muted">Waiting for your desktop…</p>
-  {:else}
+  {:else if !starting}
     <p class="muted"><span class="spinner"></span></p>
   {/if}
 </section>
@@ -277,5 +306,8 @@
     border-color: var(--accent);
     font-weight: 500;
     padding: 12px 16px;
+  }
+  .center {
+    text-align: center;
   }
 </style>

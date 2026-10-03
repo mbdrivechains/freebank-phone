@@ -279,6 +279,21 @@ owner. The check is the desktop's, so a changed page can't skip it.
 - **Test vectors:** `relay/testvectors/webauthn-v1.json` (a key, a challenge, an assertion that passes and one for each
   way it fails, and an attestation object to read the key from).
 
+## Wake on demand (app v0.2.4)
+
+The desktop app can start its background part when the user logs in, without its node ("Start when I log in"). Its
+link to the relay is up, but the node starts only when a paired phone asks for something: after the session and, for
+a phone with a passkey, Face ID have checked out. Never on a bare connection to the relay, a pair request, or a
+removed phone.
+
+While the node starts, a request that needs it (`balance`, `history`, `receive`, `status`, `send`) is answered
+`{"id","err":"<message>","starting":true}`, the request that woke it included; so is one that finds the node gone
+later (it is woken again). A wake waits up to 10 minutes for the node. If the node can't start, or stops while
+starting, such requests are answered with a plain error saying to open FreeBank on the desktop, and the next try
+waits two minutes. The page's Home screen shows that the desktop is starting and asks again every 10 seconds, for
+5 minutes at most; other screens show the error. While the desktop app stays closed, a node started this way stops
+again after 30 minutes with no phone asking. Nothing changes for the relay.
+
 ## Not in protocol v1
 
 - volunteer relays, peering, WebRTC;
