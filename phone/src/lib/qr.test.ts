@@ -73,7 +73,19 @@ describe('qr encoder', () => {
     expect(copies(true)).toBeGreaterThanOrEqual(copies(false) - 10);
   });
 
+  it('covers versions 11 to 20 (invite and payment links, desktop v0.2.8)', () => {
+    const sizes = new Set<number>();
+    for (const n of [214, 251, 287, 331, 362, 412, 450, 504, 560, 624, 666]) {
+      const text = Array.from({ length: n }, (_, i) => 'abcdefghijklmnopqrstuvwxyz0123456789:/?=&'[(i * 7 + n) % 41]).join('');
+      const m = encodeQr(text);
+      sizes.add(m.length);
+      expect(decode(m), `length ${n} (size ${m.length})`).toBe(text);
+    }
+    expect(Math.min(...sizes)).toBe(61); // version 11
+    expect(Math.max(...sizes)).toBe(97); // version 20 reached
+  });
+
   it('refuses text that does not fit', () => {
-    expect(() => encodeQr('x'.repeat(214))).toThrow();
+    expect(() => encodeQr('x'.repeat(667))).toThrow();
   });
 });

@@ -3,7 +3,12 @@
   // code is read, on Cancel, when this view closes, and when the page goes to the background.
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { ios } from '../lib/homescreen';
-  import { cameraError, scannedPair, ScanCancelled, startScan } from '../lib/scan';
+  import { cameraError, scannedPair, ScanCancelled, startScan, type Scanned } from '../lib/scan';
+
+  /** What a scanned text means: a value to hand on, or why to keep looking. A pairing code unless told otherwise
+   *  (desktop v0.2.8: "Scan to pay" takes payment codes). */
+  export let accept: (text: string, origin: string) => Scanned = scannedPair;
+  export let hint = 'Point the camera at the QR code on your desktop.';
 
   const dispatch = createEventDispatcher<{ value: string; cancel: null; failed: { text: string; reload: boolean } }>();
   let video: HTMLVideoElement;
@@ -19,7 +24,7 @@
         video,
         (text) => {
           if (gone) return;
-          const r = scannedPair(text, location.origin);
+          const r = accept(text, location.origin);
           if ('wrong' in r) {
             note = r.wrong;
             return;
@@ -60,7 +65,7 @@
     <video bind:this={video} playsinline muted></video>
     <div class="frame" aria-hidden="true"></div>
   </div>
-  <p class="small center">{starting ? 'Opening the camera…' : 'Point the camera at the QR code on your desktop.'}</p>
+  <p class="small center">{starting ? 'Opening the camera…' : hint}</p>
   {#if note}<p class="error small" data-testid="scan-note">{note}</p>{/if}
   <button class="full" on:click={() => { end(); dispatch('cancel', null); }}>Cancel</button>
 </div>

@@ -141,3 +141,14 @@ input.mono { font-family: var(--mono); font-size: 16px; }
   color: var(--error);
   border-color: var(--error);
 }
+/* A members-only or redeem-only house (node v0.2.19). */
+.badge.members {
+  color: var(--accent, #9fb0ff);
+  border-color: var(--accent, #9fb0ff);
+}
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}

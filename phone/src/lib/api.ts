@@ -33,6 +33,47 @@ export interface NodeStatus {
   credit?: boolean;
   /** Desktop v0.2.5: turning Face ID on here waits for another phone's approval first ("Approve sends on my phone"). */
   add_asks?: boolean;
+  /** Desktop v0.2.8: this phone's wallet is kept at a house ("Hosted wallets"), and where its setup is. */
+  hosted?: boolean;
+  house?: number;
+  house_name?: string | null;
+  step?: string;
+  /** step "failed": why */
+  why?: string;
+}
+
+/** A members-only or redeem-only house this desktop's wallet runs (desktop v0.2.8, `houses-mine`). */
+export interface MyHouse {
+  house: number;
+  name: string | null;
+  type: HouseType;
+}
+
+/** A phone asking to join at a house from this phone's invite (desktop v0.2.8): allow it with Face ID over
+ *  `challenge` if its comparison code matches the one the other phone shows. */
+export interface AllowAsk {
+  id: string;
+  name: string;
+  /** "042 917" */
+  code: string;
+  house: number;
+  /** The house's name, when the desktop sends it. */
+  house_name?: string | null;
+  challenge: string;
+  cred: string;
+  secs?: number;
+  /** How many other phones opened the same invite: more than 0 means someone else may be using it. */
+  others?: number;
+  /** ms, by this phone's clock */
+  deadline: number;
+}
+
+/** A members-only house's notes go only to its members' addresses: this wallet's member address there
+ *  (relay/PROTOCOL.md, "Member addresses"). */
+export interface MemberAddress {
+  house: number;
+  name: string | null;
+  address: string;
 }
 
 /** A house's notes this wallet holds (desktop v0.2.5, `notes`). Amounts are ECX: one note unit is one sat. */
@@ -51,6 +92,17 @@ export interface NoteHolding {
   can_demand: boolean;
   /** the yearly rate on demands queued while the house is suspended, in basis points (1000 = 10%) */
   rate_bps: number | null;
+  /** desktop v0.2.6 with node v0.2.19: who may hold the house's notes (absent: open) */
+  type?: HouseType;
+}
+
+/** Node v0.2.19: "open" (anyone), "members" (its notes go only to its members), "redeem" (members only, and notes pass
+ *  only back to the house or to the holder's own key). */
+export type HouseType = 'open' | 'members' | 'redeem';
+
+/** The badge for a house that isn't open, or null. */
+export function typeLabel(t: HouseType | undefined): string | null {
+  return t === 'members' ? 'Members only' : t === 'redeem' ? 'Redeem only' : null;
 }
 
 /** One house of the directory (desktop v0.2.5, `houses`). */
@@ -65,6 +117,7 @@ export interface HouseInfo {
   reserves: number | null;
   attested_at: number | null;
   rate_bps: number | null;
+  type?: HouseType;
 }
 
 /** What the desktop asks this phone to approve (desktop v0.2.5, "Approve sends on my phone"): a send from the desktop,
@@ -186,6 +239,9 @@ export class PhoneClient {
   /** Approvals the desktop asked for and still waits on (desktop v0.2.5). */
   private readonly _approvals = writable<ApprovalAsk[]>([]);
   readonly approvals: Readable<ApprovalAsk[]> = { subscribe: this._approvals.subscribe };
+  /** Phones asking to join at a house from this phone's invite (desktop v0.2.8). */
+  private readonly _allows = writable<AllowAsk[]>([]);
+  readonly allows: Readable<AllowAsk[]> = { subscribe: this._allows.subscribe };
   private statusNow: Status = 'idle';
 
   private transport: Transport | null = null;
@@ -238,6 +294,7 @@ export class PhoneClient {
   stop() {
     this.stopped = true;
     this._approvals.set([]);
+    this._allows.set([]);
     this.transport?.close();
     this.wake?.();
     for (const [id, p] of this.pending) {
@@ -289,6 +346,7 @@ export class PhoneClient {
         t.onFrame = (f) => this.onFrame(f);
         // A new session: the desktop tells it again whatever it still waits for, once this phone passed Face ID.
         this._approvals.set([]);
+        this._allows.set([]);
         hs.early.forEach((f) => this.onFrame(f));
         this.setStatus('connected');
         await ended;
@@ -396,6 +454,19 @@ export class PhoneClient {
     if (msg && typeof msg === 'object' && typeof msg['approve-done'] === 'string') {
       const id = msg['approve-done'];
       this._approvals.update((l) => l.filter((x) => x.id !== id));
+      return;
+    }
+    // A phone asks to join at a house from this phone's invite (desktop v0.2.8), or the desktop stops waiting.
+    if (msg && typeof msg === 'object' && msg.allow && typeof msg.allow.id === 'string') {
+      const a = msg.allow as AllowAsk;
+      a.deadline = Date.now() + (typeof a.secs === 'number' ? a.secs : 600) * 1000;
+      this._allows.update((l) => [...l.filter((x) => x.id !== a.id), a]);
+      note('allow: asked');
+      return;
+    }
+    if (msg && typeof msg === 'object' && typeof msg['allow-done'] === 'string') {
+      const id = msg['allow-done'];
+      this._allows.update((l) => l.filter((x) => x.id !== id));
       return;
     }
     if (!msg || typeof msg !== 'object' || typeof msg.id !== 'number') return; // no id: nothing to match
@@ -511,7 +582,8 @@ export class PhoneClient {
 
   balance = () => this.call<Balance>('balance');
   history = (count = 10) => this.call<Tx[]>('history', { count: Math.min(50, count) });
-  receive = () => this.call<{ address: string }>('receive');
+  /** A new address; an owner's desktop also lists this wallet's member addresses at members-only houses. */
+  receive = () => this.call<{ address: string; members?: MemberAddress[] }>('receive');
   nodeStatus = () => this.call<NodeStatus>('status');
   /** `auth`: Face ID over a `for: "send"` challenge, when this phone chose Face ID before each send. */
   send = (address: string, amount: number, onHeld?: (confirmId: string, why: HeldWhy) => void, auth?: AssertionParts) =>
@@ -529,8 +601,8 @@ export class PhoneClient {
   notes = () => this.call<NoteHolding[]>('notes');
   houses = () => this.call<HouseInfo[]>('houses');
 
-  // Face ID (relay/PROTOCOL.md, "Face ID: passkeys").
-  authStart = (purpose: 'open' | 'send' | 'add' | 'change') =>
+  // Face ID (relay/PROTOCOL.md, "Face ID: passkeys"). `invite` (desktop v0.2.8): making an invite to a house.
+  authStart = (purpose: 'open' | 'send' | 'add' | 'change' | 'invite') =>
     this.call<{ challenge: string; cred?: string }>('auth-start', { for: purpose });
   async auth(x: AssertionParts) {
     await this.call<object>('auth', { ...x });
@@ -574,6 +646,43 @@ export class PhoneClient {
   dismiss(id: string) {
     this._approvals.update((l) => l.filter((x) => x.id !== id));
   }
+
+  // ----- Hosted wallets (desktop v0.2.8; relay/PROTOCOL.md, "Hosted wallets") -----
+
+  /** The members-only and redeem-only houses this desktop's wallet runs: where this phone can invite people. */
+  housesMine = () => this.call<MyHouse[]>('houses-mine');
+  /** An invite to `house`, signed by this phone's Face ID over a `for: "invite"` challenge. */
+  invite = (house: number, auth: AssertionParts) => this.call<{ url: string; secs: number }>('invite', { house, auth });
+  /** Let the phone asking to join in: Face ID over the challenge its card carries. Its card goes either way. */
+  async allow(id: string, auth: AssertionParts) {
+    await this.answerAllow(id, { id, auth });
+  }
+  async declineAllow(id: string) {
+    await this.answerAllow(id, { id, decline: true });
+  }
+  private async answerAllow(id: string, a: Record<string, unknown>) {
+    try {
+      await this.call<object>('allow', a);
+    } catch (e) {
+      if (!/no longer waiting/.test((e as Error).message)) throw e;
+    }
+    this.dismissAllow(id);
+  }
+  dismissAllow(id: string) {
+    this._allows.update((l) => l.filter((x) => x.id !== id));
+  }
+
+  /** A hosted phone: its recovery words, while `status.step` is "words". */
+  words = () => this.call<{ words: string[] }>('words');
+  /** The words are written down: Face ID over a `for: "change"` challenge; the desktop then joins the house. */
+  wordsOk = (auth: AssertionParts) => this.call<object>('words-ok', { auth });
+  /** Move the money to the phone's own computer, at `address` (its new desktop's): Face ID over a `for: "change"`
+   *  challenge. The house adds the address to its members, sends the notes and coins there, and says "moved". */
+  moveHome = (address: string, auth: AssertionParts) => this.call<object>('move-home', { address, auth });
+  /** Stop a move home that can't finish (back to an ordinary hosted wallet). */
+  moveStop = (auth: AssertionParts) => this.call<object>('move-stop', { auth });
+  /** To the new computer, before moving: it shows the address and says whether it is its wallet's (desktop v0.2.8). */
+  moveNotice = (address: string, houseName: string) => this.call<{ mine: boolean }>('move-notice', { address, house_name: houseName });
 }
 
 export type { Bytes };

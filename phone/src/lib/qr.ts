@@ -1,11 +1,13 @@
-// Tiny QR code encoder: byte mode, error correction level M, versions 1-10 (up to 213 bytes).
+// Tiny QR code encoder: byte mode, error correction level M, versions 1-20 (up to 666 bytes).
 // Follows the structure of Project Nayuki's QR Code generator (MIT), cut down to what the
-// phone page needs (an address or a short URI). Mask choice uses penalty rules N1, N2 and N4.
+// phone page needs (an address, a payment link, or an invite link, desktop v0.2.8). Mask choice
+// uses penalty rules N1, N2 and N4. The tables are Nayuki's ECC_CODEWORDS_PER_BLOCK and
+// NUM_ERROR_CORRECTION_BLOCKS for level M.
 
-const ECC_PER_BLOCK_M = [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26];
-const BLOCKS_M = [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5];
+const ECC_PER_BLOCK_M = [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26];
+const BLOCKS_M = [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16];
 const FORMAT_BITS_M = 0; // ECC level M in the format word
-const MAX_VERSION = 10;
+const MAX_VERSION = 20;
 
 function rawModules(ver: number): number {
   let r = (16 * ver + 128) * ver + 64;
@@ -74,7 +76,7 @@ const MASKS: ((x: number, y: number) => boolean)[] = [
   (x, y) => (((x + y) % 2) + ((x * y) % 3)) % 2 === 0,
 ];
 
-/** Encode text (UTF-8) as a QR matrix; true = dark. Throws if it does not fit version 10-M. */
+/** Encode text (UTF-8) as a QR matrix; true = dark. Throws if it does not fit version 20-M. */
 export function encodeQr(text: string): boolean[][] {
   const bytes = Array.from(new TextEncoder().encode(text));
   let ver = 1;

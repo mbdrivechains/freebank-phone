@@ -115,6 +115,23 @@ export interface PairLink {
   room: string;
   d: string; // b64u D_pub
   c: string; // b64u pairing code
+  /** An invite to keep a wallet at a house (desktop v0.2.8, "Hosted wallets"): which house, and who invited. */
+  h?: HostedInvite;
+}
+
+/** The `h` of an invite's pairing link: the house (its id and name) and the inviting phone's name. */
+export interface HostedInvite {
+  house: number;
+  name: string;
+  by: string;
+}
+
+/** Text from a link, made safe to show: control, bidirectional and zero-width characters removed, trimmed, cut. */
+export function cleanText(s: unknown, max: number): string {
+  return String(s ?? '')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '')
+    .trim()
+    .slice(0, max);
 }
 
 /** Parse the `#pair=` fragment value. Throws with a user-facing message on anything odd. */
@@ -131,7 +148,13 @@ export async function parsePairLink(fragmentValue: string): Promise<PairLink> {
   if (d.length !== 65 || d[0] !== 4) throw new Error('The pairing link has a bad desktop key.');
   if (fromB64u(String(obj.c ?? '')).length !== 16) throw new Error('The pairing link has a bad code.');
   if ((await roomOf(d)) !== obj.room) throw new Error('The pairing link does not match its desktop key.');
-  return { v: 1, relay: obj.relay, room: obj.room, d: obj.d, c: obj.c };
+  const link: PairLink = { v: 1, relay: obj.relay, room: obj.room, d: obj.d, c: obj.c };
+  if (obj.h !== undefined) {
+    const h = obj.h;
+    if (!h || typeof h !== 'object' || !Number.isSafeInteger(h.house) || h.house < 0) throw new Error('This invite link is damaged. Ask for the QR code again.');
+    link.h = { house: h.house, name: cleanText(h.name, 60) || `House #${h.house}`, by: cleanText(h.by, 40) || 'The house' };
+  }
+  return link;
 }
 
 /** k = HKDF(ECDH(E, D_pub), salt = C, info = "fb-pair-v1", 32 bytes). */
@@ -177,11 +200,15 @@ export async function buildPairFrame(opts: {
   c: Bytes;
   pPub: Bytes;
   name: string;
+  /** Joining from an invite (desktop v0.2.8): the plaintext says `"hosted": true`. */
+  hosted?: boolean;
   nonce?: Bytes;
 }): Promise<PairFrame> {
   const k = await aesKey(await pairKeyBytes(opts.e.privateKey, opts.dPub, opts.c));
   const nonce = opts.nonce ?? randomBytes(12);
-  const pt = utf8(JSON.stringify({ p: b64u(opts.pPub), name: opts.name }));
+  const req: Record<string, unknown> = { p: b64u(opts.pPub), name: opts.name };
+  if (opts.hosted) req.hosted = true;
+  const pt = utf8(JSON.stringify(req));
   const ct = await aesSeal(k, nonce, pt);
   return { t: 'pair', e: b64u(await exportPub(opts.e.publicKey)), ct: b64u(ct), n: b64u(nonce) };
 }

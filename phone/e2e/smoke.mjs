@@ -44,6 +44,7 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
 
 // ---------- static server + mock relay (same origin, like the real relay) ----------
 let desk = null; // current MockDesktop
+const otherDesks = []; // more desktops on the mock relay (a hosted wallet's move home)
 let desktopOnline = true;
 let nextCh = 1;
 const phones = new Set();
@@ -94,7 +95,8 @@ function onPhone(ws) {
       return ws.close();
     }
     if (!chan) {
-      if (f?.t !== 'join' || f.room !== desk?.room) return ws.close();
+      const target = f?.t === 'join' ? [desk, ...otherDesks].find((d) => d?.room === f.room) : null;
+      if (!target) return ws.close();
       if (!desktopOnline) {
         ws.send(JSON.stringify({ t: 'offline' }));
         return ws.close();
@@ -102,7 +104,7 @@ function onPhone(ws) {
       ch = nextCh++;
       // Even channels get the {"ch","d"} wrapper, odd ones the bare frame: the page takes both.
       const wrap = ch % 2 === 0;
-      chan = desk.channel(
+      chan = target.channel(
         (d) => ws.readyState === 1 && ws.send(JSON.stringify(wrap ? { ch, d } : d)),
         () => ws.close(),
       );
@@ -483,8 +485,14 @@ async function runEngine(name) {
     await page.getByTestId('open-notes').click();
     await page.getByTestId('note').first().waitFor({ timeout: 10000 });
     const noteCards = await page.getByTestId('note').count();
-    check('notes: one card per house', noteCards === 2, `${noteCards} cards`);
+    check('notes: one card per house', noteCards === 4, `${noteCards} cards`);
     check('notes: the suspended house says so', await page.getByTestId('note').nth(1).getByText('Suspended').isVisible());
+    // Members-only (node v0.2.19): a badge, and Send; redeem-only: a badge, and no Send (its notes go only back).
+    const coop = page.getByTestId('note').nth(2), savings = page.getByTestId('note').nth(3);
+    check('notes: a members-only house is marked, and its notes can be sent',
+      (await coop.getByTestId('note-type').innerText()) === 'Members only' && (await coop.getByRole('button', { name: 'Send' }).count()) === 1);
+    check('notes: a redeem-only house is marked, and has no Send',
+      (await savings.getByTestId('note-type').innerText()) === 'Redeem only' && (await savings.getByRole('button', { name: 'Send' }).count()) === 0);
     await shot(page, 'notes');
     await page.getByTestId('note').first().getByRole('button', { name: 'Redeem' }).click();
     await page.getByTestId('note-action').waitFor();
@@ -501,7 +509,7 @@ async function runEngine(name) {
     await page.getByTestId('note').first().waitFor({ timeout: 10000 });
     await page.getByRole('button', { name: 'All houses' }).click();
     await page.getByTestId('house').first().waitFor({ timeout: 10000 });
-    check('houses: the directory', (await page.getByTestId('house').count()) === 2);
+    check('houses: the directory', (await page.getByTestId('house').count()) === 4);
     await shot(page, 'houses');
     await page.getByRole('button', { name: /Back/ }).click();
     await page.getByTestId('notes').waitFor();
@@ -652,7 +660,199 @@ async function runEngine(name) {
     await browser.close();
   }
   if (name === 'chromium' || name === 'webkit') await scanFlow();
+  if (name === 'chromium' || name === 'webkit') await hostedFlow();
   return results;
+
+  /**
+   * Hosted wallets (desktop v0.2.8): an owner's phone invites a shopkeeper's phone to its house and allows it; the
+   * shopkeeper's phone sets up Face ID, confirms its words, joins, shows a payment QR in Shop; the owner pays it with
+   * Scan to pay (the link pasted); the Shop screen says Paid; then the wallet moves home to a second desktop. Face ID
+   * is a stand-in here (the mock checks an assertion is there, not that it verifies).
+   */
+  async function hostedFlow() {
+    desk = await MockDesktop.create({ pairDelayMs: 300, limit: 1, ownerPasskey: true, setupMs: 1500, joinMs: 1500,
+      myHouses: [{ house: 5, name: 'Lanark Co-op', type: 'members' }] });
+    desk.linkBase = { relay: wsUrl, origin };
+    desktopOnline = true;
+    if (REAL) {
+      hostWs?.close();
+      await hostConnect();
+    }
+    const att = JSON.parse(readFileSync(resolve(here, '../../relay/testvectors/webauthn-v1.json'), 'utf8')).attestation.object;
+    const fakeFaceId = (attestation) => {
+      const dec = (t) => {
+        let x = t.replace(/-/g, '+').replace(/_/g, '/');
+        while (x.length % 4) x += '=';
+        return Uint8Array.from(atob(x), (c) => c.charCodeAt(0)).buffer;
+      };
+      class FakePublicKeyCredential {}
+      FakePublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => true;
+      window.PublicKeyCredential = FakePublicKeyCredential;
+      window.__faceIds = 0;
+      Object.defineProperty(navigator, 'credentials', {
+        configurable: true,
+        value: {
+          create: async () => ({ response: { attestationObject: dec(attestation) } }),
+          get: async () => {
+            window.__faceIds++;
+            return { response: { authenticatorData: new Uint8Array(37).buffer,
+              clientDataJSON: new TextEncoder().encode('{"type":"webauthn.get"}').buffer, signature: new Uint8Array(70).buffer } };
+          },
+        },
+      });
+    };
+    const hostedProblems = [];
+    const watch = (page) => {
+      page.on('pageerror', (e) => hostedProblems.push('pageerror: ' + e.message));
+      page.on('console', (m) => {
+        if (process.env.SMOKE_DEBUG) console.log('    console:', m.type(), m.text());
+        if (inShot && /Refused to apply a stylesheet/.test(m.text())) return;
+        if (m.type() === 'error' || /Content Security Policy|CSP/i.test(m.text())) hostedProblems.push('console: ' + m.text());
+      });
+    };
+    const b = await type.launch();
+    try {
+      const oc = await b.newContext({ ...ctx, colorScheme: 'dark', ignoreHTTPSErrors: tlsTest });
+      await oc.addInitScript(fakeFaceId, att);
+      const owner = await oc.newPage();
+      watch(owner);
+      await owner.goto(desk.pairingLink(wsUrl, origin));
+      await toPairForm(owner);
+      const ownerName = await owner.getByLabel('Name for this phone').inputValue();
+      await owner.getByRole('button', { name: 'Pair', exact: true }).click();
+      await owner.getByTestId('home').waitFor({ timeout: 15000 });
+      await owner.getByTestId('open-invite').waitFor({ timeout: 15000 });
+      check('hosted: an owner whose wallet runs a members-only house sees Invite to my house', true);
+      await owner.getByTestId('open-invite').click();
+      await owner.getByRole('button', { name: 'Show the invite with Face ID' }).click();
+      await owner.getByTestId('invite-left').waitFor({ timeout: 10000 });
+      const inviteUrl = await qrFromPage(owner);
+      const inv = inviteUrl && JSON.parse(Buffer.from(inviteUrl.split('#pair=')[1], 'base64url').toString());
+      check('hosted: the invite QR names the house and who invited', inv?.h?.house === 5 && inv.h.name === 'Lanark Co-op' && inv.h.by === ownerName,
+        JSON.stringify(inv?.h));
+      await shot(owner, 'hosted-invite');
+
+      const sc = await b.newContext({ ...ctx, colorScheme: 'dark', ignoreHTTPSErrors: tlsTest });
+      await sc.addInitScript(fakeFaceId, att);
+      const shop = await sc.newPage();
+      watch(shop);
+      await shop.goto(inviteUrl);
+      await toPairForm(shop);
+      await shop.getByTestId('join-title').waitFor({ timeout: 10000 });
+      check('hosted: the invite opens as Join <house>', (await shop.getByTestId('join-title').textContent()) === 'Join Lanark Co-op');
+      await shop.getByLabel("Your name, or your shop's").fill('Corner Shop');
+      await shot(shop, 'hosted-join');
+      await shop.getByRole('button', { name: 'Join', exact: true }).click();
+      const line = shop.getByTestId('pair-code');
+      await line.waitFor({ timeout: 15000 });
+      const shopCode = /(\d{3} \d{3})$/.exec((await line.textContent()).trim())?.[1];
+      await owner.getByTestId('allow-ask').waitFor({ timeout: 15000 });
+      const ownerCode = (await owner.getByTestId('allow-code').textContent()).trim();
+      check("hosted: the owner's Allow card shows the joiner's comparison code", !!shopCode && shopCode === ownerCode, `${shopCode} / ${ownerCode}`);
+      await shot(owner, 'hosted-allow');
+      await owner.getByRole('button', { name: 'Allow with Face ID' }).click();
+      await owner.getByTestId('allow-ask').waitFor({ state: 'detached', timeout: 15000 });
+      // The card goes when the answer is in; the desktop then makes the wallet.
+      for (let i = 0; i < 100 && desk.hosted.size === 0; i++) await owner.waitForTimeout(50);
+      check('hosted: allowed, the card goes', desk.hosted.size === 1 && desk.devices.size === 1);
+
+      await shop.getByTestId('faceid-first').waitFor({ timeout: 15000 });
+      check('hosted: Face ID comes first', true);
+      await shop.getByRole('button', { name: 'Set up Face ID' }).click();
+      await shop.getByRole('button', { name: 'Confirm Face ID' }).click();
+      await shop.getByTestId('word-list').waitFor({ timeout: 20000 });
+      const words = await shop.locator('[data-testid=word-list] .w').allTextContents();
+      check('hosted: 24 words shown once', words.length === 24 && words.join(' ') === [...desk.hosted.values()][0].words.join(' '));
+      await shot(shop, 'hosted-words');
+      await shop.getByRole('button', { name: "I've written them down" }).click();
+      for (const label of await shop.locator('form label').allTextContents()) {
+        const n = Number(/Word (\d+)/.exec(label)?.[1]);
+        await shop.getByLabel(label, { exact: true }).fill(words[n - 1]);
+      }
+      await shop.getByRole('button', { name: 'Confirm with Face ID' }).click();
+      await shop.getByTestId('step-joining').waitFor({ timeout: 10000 }).catch(() => {});
+      await shop.getByTestId('open-shop').waitFor({ timeout: 20000 });
+      check('hosted: words confirmed, joined, ready', [...desk.hosted.values()][0].step === 'ready');
+      await shot(shop, 'hosted-home');
+
+      await shop.getByTestId('open-shop').click();
+      for (const k of ['0', '.', '0', '5']) await shop.getByRole('button', { name: k, exact: true }).click();
+      await shop.getByRole('button', { name: 'Show the QR code' }).click();
+      await shop.getByTestId('shop-asked').waitFor({ timeout: 10000 });
+      const payUrl = await qrFromPage(shop);
+      const pay = payUrl && JSON.parse(Buffer.from(payUrl.split('#pay=')[1], 'base64url').toString());
+      const member = [...desk.hosted.values()][0].memberAddress;
+      check('hosted: the Shop QR is a payment link to the member address', pay?.a === member && pay.h === 5 && pay.u === 0.05 && pay.n === 'Corner Shop',
+        JSON.stringify(pay));
+      await shot(shop, 'hosted-shop-qr');
+
+      await owner.getByRole('button', { name: 'Back' }).click();
+      await owner.getByTestId('open-scanpay').click();
+      await owner.getByLabel('Or paste a payment link or address').fill(payUrl);
+      await owner.getByRole('button', { name: 'Pay this' }).click();
+      await owner.getByTestId('pay-to').waitFor({ timeout: 10000 });
+      check('scan to pay: the shop and the amount are filled in',
+        (await owner.getByTestId('pay-to').textContent()).includes('Corner Shop') && (await owner.getByLabel('Amount of notes').inputValue()) === '0.05');
+      await shot(owner, 'scan-to-pay');
+      await owner.getByRole('button', { name: 'Review' }).click();
+      await owner.getByRole('button', { name: 'Send 0.05 ECX' }).click();
+      await owner.getByTestId('note-receipt').waitFor({ timeout: 15000 });
+      check('scan to pay: paid', desk.requests.some((r) => r.m === 'note-send' && r.a.address === member && r.a.house === 5 && r.a.amount === 0.05));
+      await shop.getByTestId('shop-paid').waitFor({ timeout: 15000 });
+      check("hosted: the Shop screen says Paid, and today's takings list it", (await shop.getByTestId('takings').locator('li').count()) === 1);
+      await shot(shop, 'hosted-shop-paid');
+
+      if (REAL) {
+        console.log(`  [${name}] note: moving home needs a second desktop on the relay; only with the mock relay`);
+      } else {
+        const desk2 = await MockDesktop.create({ pairDelayMs: 300 });
+        otherDesks.push(desk2);
+        await shop.getByRole('button', { name: 'Next customer' }).click();
+        await shop.getByRole('button', { name: 'Back' }).click();
+        await shop.getByTestId('open-move').click();
+        await shop.getByLabel('Or paste its pairing link').fill(desk2.pairingLink(wsUrl, origin));
+        await shop.getByRole('button', { name: 'Pair with this link' }).click();
+        await shop.getByTestId('move-tell').waitFor({ timeout: 20000 });
+        const target = (await shop.getByTestId('move-target').textContent()).trim();
+        check('move home: paired with the new computer, shown its address, the house not yet asked',
+          desk2.devices.size === 1 && MockDesktop.addresses.get(target) === desk2 && [...desk.hosted.values()][0].step === 'ready', target);
+        check('move home: the new computer was told the address first, and it is its own',
+          desk2.requests.some((r) => r.m === 'move-notice' && r.a.address === target));
+        await shot(shop, 'move-tell');
+        const had = desk2.wallet.notes.find((n) => n.house === 5)?.amount ?? 0;
+        await shop.getByRole('button', { name: 'Move my money with Face ID' }).click();
+        await shop.getByTestId('move-moving').waitFor({ timeout: 10000 }).catch(() => {});
+        check('move home: the house was asked with Face ID for that address',
+          desk.requests.some((r) => r.m === 'move-home' && r.a.address === target && typeof r.a.auth?.sig === 'string'));
+        await shop.getByTestId('move-done').waitFor({ timeout: 20000 });
+        check('move home: done says to replace the shop\'s QR codes', (await shop.getByTestId('move-done').textContent()).includes('QR codes'));
+        await shop.getByRole('button', { name: 'Done' }).click();
+        await shop.getByTestId('home').waitFor({ timeout: 20000 });
+        const got = Math.round(((desk2.wallet.notes.find((n) => n.house === 5)?.amount ?? 0) - had) * 1e8) / 1e8;
+        check('move home: the money moved to the new computer, and the phone is its own',
+          [...desk.hosted.values()][0].step === 'moved' && got === 0.05, `got ${got}`);
+        await shot(shop, 'moved-home');
+        await shop.reload();
+        await shop.getByTestId('home').waitFor({ timeout: 15000 });
+        check('move home: after a reload, still the new computer\'s', true);
+        await shop.getByRole('button', { name: 'Receive', exact: true }).click();
+        await shop.getByTestId('member-address').waitFor({ timeout: 10000 });
+        check('move home: Receive shows the member address at the house',
+          (await shop.getByTestId('member-address').textContent()).includes(target) &&
+          (await shop.getByTestId('member-address').textContent()).includes('Lanark Co-op'));
+        await shot(shop, 'member-address');
+        otherDesks.length = 0;
+      }
+      const netNoise = hostedProblems.filter((m) => /WebSocket connection to .* failed/.test(m));
+      const real = hostedProblems.filter((m) => !netNoise.includes(m));
+      check('hosted: no page errors or CSP violations', real.length === 0, real.join(' | '));
+    } catch (e) {
+      check('hosted flow completed', false, e.message.split('\n')[0]);
+      if (hostedProblems.length) console.log('  problems:', hostedProblems.join(' | '));
+    } finally {
+      await b.close();
+    }
+  }
 
   /**
    * "Scan the code on your desktop" in the Home Screen app (app v0.2.2), started as one (navigator.standalone).

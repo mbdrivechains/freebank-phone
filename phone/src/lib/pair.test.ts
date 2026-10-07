@@ -75,3 +75,45 @@ describe('a pairing link must name this page’s own relay', () => {
     expect(relayMatchesPage('wss://app.ecxfreebank.com/ws', { protocol: 'file:', host: '' })).toBe(false);
   });
 });
+
+describe('invites to a house (desktop v0.2.8, "Hosted wallets")', () => {
+  async function inviteLink(h: unknown) {
+    const desk = await MockDesktop.create({ pairDelayMs: 10 });
+    const url: string = desk.pairingLink('wss://relay.example/ws');
+    const obj = JSON.parse(new TextDecoder().decode(fromB64u(url.split('#pair=')[1])));
+    obj.h = h;
+    const { b64u, utf8 } = await import('./crypto');
+    return b64u(utf8(JSON.stringify(obj)));
+  }
+
+  it('reads the house and who invited, cleaned for showing', async () => {
+    const link = await parsePairLink(await inviteLink({ house: 5, name: 'Lanark‮ Co-op', by: 'Sam​’s iPhone' }));
+    expect(link.h).toEqual({ house: 5, name: 'Lanark Co-op', by: 'Sam’s iPhone' });
+  });
+
+  it('refuses a damaged invite', async () => {
+    for (const h of [null, 7, { house: -1 }, { house: 1.5 }, { name: 'x' }]) {
+      await expect(parsePairLink(await inviteLink(h))).rejects.toThrow(/invite link is damaged/);
+    }
+  });
+
+  it('an ordinary link has no invite', async () => {
+    const desk = await MockDesktop.create({ pairDelayMs: 10 });
+    const url: string = desk.pairingLink('wss://relay.example/ws');
+    expect((await parsePairLink(url.split('#pair=')[1])).h).toBeUndefined();
+  });
+
+  it('a hosted request says so; the mock refuses it with an ordinary pairing code', async () => {
+    const desk = await MockDesktop.create({ pairDelayMs: 10 });
+    const url: string = desk.pairingLink('wss://relay.example/ws');
+    const link = await parsePairLink(url.split('#pair=')[1]);
+    const P = await genKeyPair(false);
+    const E = await genKeyPair(false);
+    const frame = await buildPairFrame({ e: E, dPub: fromB64u(link.d), c: fromB64u(link.c), pPub: await exportPub(P.publicKey), name: 'Shop', hosted: true });
+    const answers: string[] = [];
+    desk.channel((f: any) => answers.push(f.t), () => {}).onFrame(frame);
+    await until(() => answers.length === 1);
+    expect(answers).toEqual(['pair-refused']);
+    expect(desk.log).toContain('pair: hosted request with a pairing code');
+  });
+});

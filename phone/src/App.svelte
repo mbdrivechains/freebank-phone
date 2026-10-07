@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { PhoneClient, type ApprovalAsk, type NoteHolding, type PaymentKind, type Status } from './lib/api';
+  import { PhoneClient, type AllowAsk, type ApprovalAsk, type NoteHolding, type PaymentKind, type Status } from './lib/api';
   import { RelayLink } from './lib/relay';
-  import { loadPairing, forgetPairing, type Pairing } from './lib/store';
+  import { loadMoving, loadPairing, forgetPairing, isHosted, type Pairing } from './lib/store';
   import { noteFlow, sendFlow } from './lib/sendflow';
-  import { takePairFragment } from './lib/fragment';
+  import { takePairFragment, takePayFragment } from './lib/fragment';
   import Pair from './components/Pair.svelte';
   import Home from './components/Home.svelte';
   import Receive from './components/Receive.svelte';
@@ -17,10 +17,20 @@
   import HomeScreenHint from './components/HomeScreenHint.svelte';
   import Report from './components/Report.svelte';
   import Lock from './components/Lock.svelte';
+  import Allow from './components/Allow.svelte';
+  import Invite from './components/Invite.svelte';
+  import ScanPay from './components/ScanPay.svelte';
+  import HostedHome from './components/HostedHome.svelte';
+  import Shop from './components/Shop.svelte';
+  import MoveHome from './components/MoveHome.svelte';
 
   export let pairValue: string | null = null;
+  /** A payment link the page was opened with (`#pay=`, desktop v0.2.8), already taken from the address bar. */
+  export let payValue: string | null = null;
 
-  type Screen = 'loading' | 'pair' | 'home' | 'receive' | 'send' | 'settings' | 'notes' | 'houses' | 'note';
+  type Screen =
+    | 'loading' | 'pair' | 'home' | 'receive' | 'send' | 'settings' | 'notes' | 'houses' | 'note'
+    | 'invite' | 'scanpay' | 'shop' | 'move';
   let screen: Screen = 'loading';
   let pairing: Pairing | null = null;
   let client: PhoneClient | null = null;
@@ -38,6 +48,13 @@
   let noteAct: { holding: NoteHolding; kind: PaymentKind } | null = null;
   // "Report a problem or suggest something", from the footer on any screen.
   let reporting = false;
+  // Desktop v0.2.8: phones asking to join at a house from this phone's invite (an owner's phone).
+  let allows: AllowAsk[] = [];
+  let unsubAllows: (() => void) | null = null;
+  // A hosted wallet moving home: the new computer's pairing, waiting until the house is told.
+  let moving: Pairing | null = null;
+  let payNote = '';
+  $: hosted = isHosted(pairing);
 
   function startClient(p: Pairing) {
     stopClient();
@@ -49,6 +66,7 @@
       locked = l;
     });
     unsubApprovals = client.approvals.subscribe((l) => (approvals = l));
+    unsubAllows = client.allows.subscribe((l) => (allows = l));
     client.start();
   }
 
@@ -60,6 +78,9 @@
     unsubApprovals?.();
     unsubApprovals = null;
     approvals = [];
+    unsubAllows?.();
+    unsubAllows = null;
+    allows = [];
     locked = false;
     client?.stop();
     client = null;
@@ -69,6 +90,7 @@
   onMount(async () => {
     try {
       pairing = await loadPairing();
+      moving = isHosted(pairing) ? await loadMoving() : null;
     } catch (e) {
       loadError = 'This browser will not let the page store its key (private browsing?). ' + (e as Error).message;
     }
@@ -76,7 +98,11 @@
     else if (pairing) {
       startClient(pairing);
       screen = 'home';
-    } else screen = 'pair';
+      if (payValue) openPay(payValue);
+    } else {
+      if (payValue) payNote = 'That was a payment link. Pair this phone with your desktop first, then use Scan to pay.';
+      screen = 'pair';
+    }
   });
 
   // Phone back button / swipe: sub-screens are history entries on top of home.
@@ -96,14 +122,28 @@
     screen = (e.state?.screen as Screen) ?? 'home';
     // A note action's screen needs its house; without it (a reload), back to Notes.
     if (screen === 'note' && !noteAct) screen = 'notes';
+    // Screens for the other kind of pairing (an owner's invite, a hosted phone's shop): back home.
+    if ((screen === 'invite' && hosted) || ((screen === 'shop' || screen === 'move') && !hosted)) screen = 'home';
   }
 
   // A pairing link opened while the page is already open (same document, only the hash changes).
   function onHash() {
+    const pay = takePayFragment();
+    if (pay) {
+      if (pairing) openPay(pay);
+      else payNote = 'That was a payment link. Pair this phone with your desktop first, then use Scan to pay.';
+      return;
+    }
     const v = takePairFragment();
     if (!v) return;
     pairValue = v;
     screen = 'pair';
+  }
+
+  // A payment link (desktop v0.2.8): straight to Scan to pay, which reads it.
+  function openPay(v: string) {
+    payValue = v;
+    go('scanpay');
   }
 
   function onVisible() {
@@ -112,8 +152,22 @@
 
   function onPaired(e: CustomEvent<Pairing>) {
     pairValue = null;
+    moving = null;
     startClient(e.detail);
     screen = 'home';
+  }
+
+  // The hosted wallet moved home: this phone now belongs to the new computer.
+  function onMoved(e: CustomEvent<Pairing>) {
+    moving = null;
+    startClient(e.detail);
+    history.replaceState(null, '');
+    screen = 'home';
+  }
+
+  async function startMove() {
+    moving = await loadMoving().catch(() => null);
+    go('move');
   }
 
   // `denied` comes in clear, so it isn't proof: trying again keeps the key and asks the desktop once more.
@@ -124,6 +178,7 @@
   async function forget() {
     stopClient();
     await forgetPairing();
+    moving = null;
     sendFlow.reset();
     noteFlow.reset();
     pairing = null;
@@ -169,6 +224,7 @@
 {:else if screen === 'loading'}
   <p class="muted center"><span class="spinner"></span></p>
 {:else if screen === 'pair'}
+  {#if payNote}<p class="card small" data-testid="pay-note">{payNote}</p>{/if}
   {#key pairValue}
     <Pair {pairValue} alreadyPaired={!!pairing} on:paired={onPaired} />
   {/key}
@@ -184,11 +240,18 @@
   <Lock {client} />
 {:else if client && pairing}
   {#key unlocks}
-  {#if screen === 'home'}
-    <Home {client} {status} on:receive={() => go('receive')} on:send={() => go('send')} on:notes={() => go('notes')} />
+  {#if screen === 'home' && hosted}
+    <HostedHome {client} {status} {pairing} moving={!!moving} on:shop={() => go('shop')} on:receive={() => go('receive')}
+      on:pay={() => { payValue = null; go('scanpay'); }} on:send={() => go('send')} on:notes={() => go('notes')}
+      on:move={startMove} on:forget={forget} />
+    <HomeScreenHint paired />
+  {:else if screen === 'home'}
+    <Home {client} {status} on:receive={() => go('receive')} on:send={() => go('send')} on:notes={() => go('notes')}
+      on:scanpay={() => { payValue = null; go('scanpay'); }} on:invite={() => go('invite')} />
     <HomeScreenHint paired />
   {:else if screen === 'receive'}
-    <Receive {client} {status} on:back={() => go('home')} />
+    <Receive {client} {status} on:back={() => go('home')}
+      pay={hosted && pairing.house ? { house: pairing.house.house, houseName: pairing.house.name, shop: pairing.name } : null} />
   {:else if screen === 'send'}
     <Send {client} {status} on:back={() => go('home')} />
   {:else if screen === 'settings'}
@@ -200,6 +263,14 @@
     <Houses {client} {status} on:back={() => go('notes')} />
   {:else if screen === 'note' && noteAct}
     <NoteAction {client} {status} holding={noteAct.holding} kind={noteAct.kind} on:back={() => go('notes')} />
+  {:else if screen === 'invite' && !hosted}
+    <Invite {client} {status} on:back={() => go('home')} />
+  {:else if screen === 'scanpay'}
+    <ScanPay {client} {status} initial={payValue} on:back={() => { payValue = null; go('home'); }} />
+  {:else if screen === 'shop' && hosted && pairing.house}
+    <Shop {client} {status} house={pairing.house.house} houseName={pairing.house.name} shopName={pairing.name} on:back={() => go('home')} />
+  {:else if screen === 'move' && hosted}
+    <MoveHome {client} {status} {pairing} resume={moving} on:back={() => go('home')} on:moved={onMoved} />
   {/if}
   {/key}
 {/if}
@@ -207,6 +278,10 @@
 {#if client && pairing && approvals.length && screen !== 'pair' && status !== 'denied'}
   {#key approvals[0].id}
     <Approve {client} ask={approvals[0]} />
+  {/key}
+{:else if client && pairing && !hosted && allows.length && screen !== 'pair' && status !== 'denied'}
+  {#key allows[0].id}
+    <Allow {client} ask={allows[0]} />
   {/key}
 {/if}
 

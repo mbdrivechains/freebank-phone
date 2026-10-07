@@ -11,6 +11,7 @@ export class PairRefusedError extends Error {
 }
 
 const PAIR_WAIT_MS = 5 * 60_000; // the pairing code lives 5 minutes
+const INVITE_WAIT_MS = 10 * 60_000; // an invite lives 10 minutes (desktop v0.2.8)
 
 /**
  * The page talks only to the relay it was loaded from: wss://<this host> on https (ws:// on http, for local
@@ -33,19 +34,30 @@ export function relayMatchesPage(relay: string, page: { protocol: string; host: 
  * `onWaiting(code)` fires once the request is out: the desktop is now showing "Allow this phone?" with its
  * comparison code, and the phone shows `code` (6 digits) for the user to compare.
  */
-export async function pairPhone(link: PairLink, name: string, onWaiting: (code: string) => void): Promise<Pairing> {
+export async function pairPhone(
+  link: PairLink,
+  name: string,
+  onWaiting: (code: string) => void,
+  save: (p: Pairing) => Promise<void> = savePairing,
+): Promise<Pairing> {
   const P = await genKeyPair(false); // non-extractable device key
   const E = await genKeyPair(false); // pairing ephemeral
   const pPub = await exportPub(P.publicKey);
   const dPub = fromB64u(link.d);
   const c = fromB64u(link.c);
-  const frame = await buildPairFrame({ e: E, dPub, c, pPub, name });
+  // An invite's link (`h`) joins a wallet kept at a house (desktop v0.2.8): the request says so.
+  const frame = await buildPairFrame({ e: E, dPub, c, pPub, name, hosted: !!link.h });
   const code = await pairCode(dPub, pPub, await exportPub(E.publicKey), c);
 
   const relay = await RelayLink.open(link.relay, link.room);
   try {
     const answer = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('No answer from the desktop in 5 minutes. Make a new pairing QR code and try again.')), PAIR_WAIT_MS);
+      const timer = setTimeout(
+        () => reject(new Error(link.h
+          ? 'No answer in 10 minutes. Ask for a new invite QR code and try again.'
+          : 'No answer from the desktop in 5 minutes. Make a new pairing QR code and try again.')),
+        link.h ? INVITE_WAIT_MS : PAIR_WAIT_MS,
+      );
       relay.onFrame = (f) => {
         if (f?.t === 'paired' || f?.t === 'pair-refused') {
           clearTimeout(timer);
@@ -76,7 +88,9 @@ export async function pairPhone(link: PairLink, name: string, onWaiting: (code: 
     pPriv: P.privateKey,
     name,
     pairedAt: Date.now(),
+    kind: link.h ? 'hosted' : 'owner',
+    ...(link.h ? { house: link.h } : {}),
   };
-  await savePairing(pairing);
+  await save(pairing);
   return pairing;
 }

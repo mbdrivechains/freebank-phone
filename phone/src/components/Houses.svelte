@@ -1,7 +1,7 @@
 <script lang="ts">
   // Every house that issues notes (desktop v0.2.5, `houses`): its state and how sound it is, from the chain.
   import { createEventDispatcher, onMount } from 'svelte';
-  import type { HouseInfo, PhoneClient, Status } from '../lib/api';
+  import { typeLabel, type HouseInfo, type PhoneClient, type Status } from '../lib/api';
   import { fmtEcx } from '../lib/format';
   import Back from './Back.svelte';
 
@@ -50,7 +50,10 @@
             <div class="name">{h.name ?? `House #${h.house}`}</div>
             <div class="muted small">House #{h.house}</div>
           </div>
-          <span class="badge s-{h.state}">{h.state_name}</span>
+          <div class="badges">
+            <span class="badge s-{h.state}">{h.state_name}</span>
+            {#if typeLabel(h.type)}<span class="badge members">{typeLabel(h.type)}</span>{/if}
+          </div>
         </div>
         <dl class="small">
           {#if h.ratio_bps !== null}<div><dt>Reserve ratio</dt><dd>{(h.ratio_bps / 100).toFixed(0)}%</dd></div>{/if}

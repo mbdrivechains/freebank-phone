@@ -1,7 +1,7 @@
 <script lang="ts">
   // Your notes, house by house (desktop v0.2.5, `notes`), with what can be done with each: send, redeem, demand.
   import { createEventDispatcher, onMount } from 'svelte';
-  import type { NoteHolding, PaymentKind, PhoneClient, Status } from '../lib/api';
+  import { typeLabel, type NoteHolding, type PaymentKind, type PhoneClient, type Status } from '../lib/api';
   import { fmtEcx } from '../lib/format';
   import Back from './Back.svelte';
 
@@ -68,7 +68,10 @@
             <div class="name">{n.name ?? `House #${n.house}`}</div>
             <div class="muted small">House #{n.house}</div>
           </div>
-          <span class="badge s-{n.state}">{n.state_name}</span>
+          <div class="badges">
+            <span class="badge s-{n.state}">{n.state_name}</span>
+            {#if typeLabel(n.type)}<span class="badge members" data-testid="note-type">{typeLabel(n.type)}</span>{/if}
+          </div>
         </div>
         <div class="big">{fmtEcx(n.amount)} <span class="unit">ECX</span></div>
         {#if n.demanded > 0}
@@ -77,7 +80,10 @@
           </p>
         {/if}
         <div class="acts">
-          <button disabled={free(n) <= 0 || status !== 'connected'} on:click={() => dispatch('act', { holding: n, kind: 'note-send' })}>Send</button>
+          <!-- A redeem-only house's notes go only back to the house (or onto the holder's own key, done on the desktop). -->
+          {#if n.type !== 'redeem'}
+            <button disabled={free(n) <= 0 || status !== 'connected'} on:click={() => dispatch('act', { holding: n, kind: 'note-send' })}>Send</button>
+          {/if}
           <button disabled={!n.can_redeem || n.redeemable <= 0 || status !== 'connected'} on:click={() => dispatch('act', { holding: n, kind: 'note-redeem' })}>Redeem</button>
           <button disabled={!n.can_demand || free(n) <= 0 || status !== 'connected'} on:click={() => dispatch('act', { holding: n, kind: 'note-demand' })}>Demand</button>
         </div>

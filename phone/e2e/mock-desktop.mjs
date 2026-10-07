@@ -15,6 +15,17 @@
 // with its code. With `checkCode`, the "user" allows a request only if its code is what the phone shows: a test
 // reads the code off the phone and sets `phoneShows` ("042 917"), as the owner compares the two screens.
 // The host proof (`proof(n)`) signs "fb-relay-proof-v1" || n (PROTOCOL.md, "The relay").
+//
+// Hosted wallets (PROTOCOL.md, "Hosted wallets", desktop v0.2.8): an owner's phone gets `houses-mine` (`myHouses`) and
+// `invite` (one-time codes, 10 minutes); a pair request with an invite code and `"hosted": true` sends the inviting
+// phone an `allow` card, and its `allow` answer (or `answerAllow(id, yes)`) settles it. A hosted phone lives in `hosted`
+// (by P_pub), apart from `devices`, with its own wallet and methods: a passkey first, then `step` setup -> words
+// (after `setupMs`) -> joining (on `words-ok`) -> ready (after `joinMs`) -> moving (on `move-home`) -> moved (after
+// `moveMs`). Notes an owner sends to a hosted phone's member address land in that phone's wallet. Moving home sends
+// the hosted wallet's notes and coins to the address the phone's new desktop gave (`receive`); when that address is
+// another MockDesktop's, they land in its wallet and it lists the address under `members` (PROTOCOL.md, "Moving home",
+// "Member addresses"). At most two asks wait per invite, and each card says how many `others` there are. The mock
+// checks that Face ID is present (an `auth` with a `sig`), not that it verifies.
 import {
   b64u, unb64u, genKey, room as roomOf, desktopPairKey, open as aesOpen, desktopSession, Direction,
   pairCode, showPairCode, proofMessage,
@@ -31,6 +42,9 @@ export const RESTARTED = 'the desktop app restarted; nothing was sent';
 export const DECLINED = 'declined on the desktop';
 
 export class MockDesktop {
+  /** Addresses owners' `receive` gave out, by the desktop that gave them (moving home finds the new desktop here). */
+  static addresses = new Map();
+
   static async create(opts = {}) {
     const D = await genKey();
     const d = new MockDesktop(D, await roomOf(D.pub), opts);
@@ -53,6 +67,18 @@ export class MockDesktop {
     this.holdDelayMs = opts.holdDelayMs ?? 1500;
     this.holdExpiryMs = opts.holdExpiryMs ?? 10 * 60_000;
     this.locked = opts.locked ?? false;
+    // Hosted wallets (desktop v0.2.8)
+    this.myHouses = opts.myHouses ?? [];
+    this.ownerPasskey = opts.ownerPasskey ?? false; // owners' auth-start gives a credential id (Face ID on)
+    this.invites = []; // { c, house, by, dev, until, used }
+    this.allowAsks = new Map(); // id -> { msg, answer: null | 'allowed' | 'declined' }
+    this.hosted = new Map(); // b64u P_pub -> hosted phone
+    this.setupMs = opts.setupMs ?? 1200;
+    this.joinMs = opts.joinMs ?? 1200;
+    this.moveMs = opts.moveMs ?? 1200;
+    // This wallet's member addresses at members-only houses (owners' `receive`): [{ house, name, address }]
+    this.memberAddresses = opts.memberAddresses ?? [];
+    this.linkBase = { relay: 'wss://relay.example/ws', origin: 'https://relay.example' };
     this.credit = opts.credit ?? true; // desktop v0.2.5: notes, houses and the note actions
     this.held = new Map(); // confirm id -> { id, dev, amount, address, at, why, cancelled, timer, expiry }
     this.approvals = new Map(); // approval id -> { msg, answer: null | 'approved' | 'declined', auth }
@@ -76,18 +102,28 @@ export class MockDesktop {
           can_redeem: true, can_demand: true, rate_bps: 1000 },
         { house: 4, name: 'Ayr Bank', state: 'd', state_name: 'Suspended', amount: 0.2, demanded: 0.05, redeemable: 0.05,
           can_redeem: true, can_demand: true, rate_bps: 1000 },
+        // Node v0.2.19's members-only and redeem-only houses (desktop v0.2.6 says `type`).
+        { house: 5, name: 'Lanark Co-op', state: 'o', state_name: 'Open', amount: 0.1, demanded: 0, redeemable: 0.1,
+          can_redeem: true, can_demand: true, rate_bps: null, type: 'members' },
+        { house: 6, name: 'Paisley Savings', state: 'o', state_name: 'Open', amount: 0.05, demanded: 0, redeemable: 0.05,
+          can_redeem: true, can_demand: true, rate_bps: null, type: 'redeem' },
       ],
       houses: [
         { house: 3, name: 'Bank of Leith', state: 'o', state_name: 'Open', ratio_bps: 12500, outstanding: 0.9,
           reserves: 1.2, attested_at: 1200, rate_bps: 1000 },
         { house: 4, name: 'Ayr Bank', state: 'd', state_name: 'Suspended', ratio_bps: 6000, outstanding: 0.4,
           reserves: 0.24, attested_at: 1100, rate_bps: 1000 },
+        { house: 5, name: 'Lanark Co-op', state: 'o', state_name: 'Open', ratio_bps: 15000, outstanding: 0.1,
+          reserves: 0.15, attested_at: 1150, rate_bps: null, type: 'members' },
+        { house: 6, name: 'Paisley Savings', state: 'o', state_name: 'Open', ratio_bps: 20000, outstanding: 0.05,
+          reserves: 0.1, attested_at: 1160, rate_bps: null, type: 'redeem' },
       ],
     };
   }
 
   /** A fresh pairing link (what the desktop's QR code holds). */
   pairingLink(relayUrl, pageOrigin = 'https://relay.example') {
+    this.linkBase = { relay: relayUrl, origin: pageOrigin };
     this.code = rand(16);
     this.codeUsed = false;
     this.phoneShows = null;
@@ -148,15 +184,35 @@ export class MockDesktop {
     };
   }
 
+  /** Open a pair request with code `c`, or null. */
+  async openPair(f, c) {
+    try {
+      const k = await desktopPairKey(this.D.priv, unb64u(f.e), c);
+      const req = JSON.parse(new TextDecoder().decode(await aesOpen(k, unb64u(f.n), unb64u(f.ct))));
+      const { code } = await pairCode({ dPub: this.D.pub, pPub: unb64u(req.p), ePub: unb64u(f.e), c });
+      return { req, code };
+    } catch {
+      return null;
+    }
+  }
+
   async onPair(chan, f) {
+    // An invite's code (desktop v0.2.8) or the pairing code.
+    for (const inv of this.invites) {
+      if (inv.used || Date.now() > inv.until) continue;
+      const opened = await this.openPair(f, inv.c);
+      if (opened) return this.onHostedPair(chan, opened.req, showPairCode(opened.code), inv);
+    }
     let req;
     let code;
-    try {
-      const k = await desktopPairKey(this.D.priv, unb64u(f.e), this.code);
-      req = JSON.parse(new TextDecoder().decode(await aesOpen(k, unb64u(f.n), unb64u(f.ct))));
-      ({ code } = await pairCode({ dPub: this.D.pub, pPub: unb64u(req.p), ePub: unb64u(f.e), c: this.code }));
-    } catch {
+    const opened = this.code ? await this.openPair(f, this.code) : null;
+    if (!opened) {
       this.log.push('pair: bad');
+      return chan.toPhone({ t: 'pair-refused' });
+    }
+    ({ req, code } = opened);
+    if (req.hosted) {
+      this.log.push('pair: hosted request with a pairing code');
       return chan.toPhone({ t: 'pair-refused' });
     }
     // "Allow this phone? <name>. Allow only if your phone shows <code>."
@@ -185,6 +241,67 @@ export class MockDesktop {
     chan.toPhone({ t: 'paired' });
   }
 
+  /** An invite to `house` from owner phone `dev` (desktop v0.2.8): the URL its QR code holds. */
+  makeInvite(house, dev) {
+    const c = rand(16);
+    const h = this.myHouses.find((x) => x.house === house);
+    this.invites.push({ c, house, by: dev.name, dev, until: Date.now() + 600_000, used: false });
+    const json = JSON.stringify({ v: 1, relay: this.linkBase.relay, room: this.room, d: this.dPub, c: b64u(c),
+      h: { house, name: h?.name ?? `House #${house}`, by: dev.name } });
+    return this.linkBase.origin + '/#pair=' + b64u(new TextEncoder().encode(json));
+  }
+
+  /** A hosted pair request: the inviting phone allows it (its `allow` answer, or `answerAllow`). */
+  async onHostedPair(chan, req, code, inv) {
+    if (!req.hosted) {
+      this.log.push('pair: ordinary request with an invite code');
+      return chan.toPhone({ t: 'pair-refused' });
+    }
+    // Two asks at most per invite: someone who saw the QR can't fill the queue (security review of v0.2.8, L4).
+    const live = () => [...this.allowAsks.values()].filter((x) => x.inv === inv && !x.answer);
+    if (live().length >= 2) {
+      this.log.push('pair: a third ask for one invite refused');
+      return chan.toPhone({ t: 'pair-refused' });
+    }
+    const id = 'w' + hex(rand(8));
+    const houseName = this.myHouses.find((x) => x.house === inv.house)?.name ?? null;
+    const msg = { allow: { id, name: req.name, code, house: inv.house, house_name: houseName, challenge: b64u(rand(32)), cred: 'Y3JlZC1pZA', secs: 600, others: 0 } };
+    const ask = { msg, answer: null, req, inv };
+    this.allowAsks.set(id, ask);
+    this.pairs.push({ name: req.name, code, answer: null, hosted: true });
+    this.log.push(`pair: hosted request ${req.name} ${code}`);
+    // Each waiting card says how many other phones opened the same invite.
+    const now = live();
+    for (const x of now) {
+      x.msg.allow.others = now.length - 1;
+      this.toDevice(inv.dev, x.msg);
+    }
+    for (let i = 0; i < 1200 && !ask.answer && !inv.used; i++) await new Promise((r) => setTimeout(r, 50));
+    this.allowAsks.delete(id);
+    this.toDevice(inv.dev, { 'allow-done': id });
+    if (ask.answer !== 'allowed' || inv.used) {
+      this.log.push(`pair: hosted refused ${req.name}`);
+      return chan.toPhone({ t: 'pair-refused' });
+    }
+    inv.used = true;
+    const words = Array.from({ length: 24 }, (_, i) => ['abandon', 'ability', 'able', 'about', 'above', 'absent'][i % 6] + (i + 1));
+    const ph = {
+      name: req.name, chans: new Set(), house: inv.house, houseName: this.myHouses.find((x) => x.house === inv.house)?.name ?? null,
+      step: 'setup', why: null, passkey: false, words, memberAddress: fakeAddress(),
+      wallet: { confirmed: 0, pending: 0, notes: [], txs: [] },
+    };
+    this.hosted.set(req.p, ph);
+    this.log.push('pair: hosted allowed ' + req.name);
+    chan.toPhone({ t: 'paired' });
+    setTimeout(() => ph.step === 'setup' && (ph.step = 'words'), this.setupMs);
+  }
+
+  /** The owner answers a hosted ask on the desktop instead of the phone (tests). */
+  answerAllow(id, yes) {
+    const a = this.allowAsks.get(id);
+    if (a && !a.answer) a.answer = yes ? 'allowed' : 'declined';
+  }
+
   /** The host's answer to the relay's challenge: ECDSA P-256/SHA-256, r || s, over "fb-relay-proof-v1" || n. */
   async proof(nB64u) {
     const subtle = (globalThis.crypto ?? webcrypto).subtle;
@@ -194,6 +311,21 @@ export class MockDesktop {
   }
 
   async onHello(chan, f) {
+    const hp = this.hosted.get(f.p);
+    if (hp) {
+      const eD = await genKey();
+      const s = await desktopSession({
+        dPriv: this.D.priv, dPub: this.D.pub, eDPriv: eD.priv, eDPub: eD.pub, pPub: unb64u(f.p), ePPub: unb64u(f.e),
+      });
+      chan.tx = new Direction(s.kDp);
+      chan.rx = new Direction(s.kPd);
+      chan.state = 'session';
+      chan.device = hp;
+      chan.hosted = true;
+      hp.chans.add(chan);
+      this.log.push('hello: ok hosted ' + hp.name);
+      return chan.toPhone({ t: 'hello-ok', e: b64u(eD.pub) });
+    }
     const dev = this.devices.get(f.p);
     if (!dev) {
       this.log.push('hello: denied');
@@ -251,6 +383,13 @@ export class MockDesktop {
       w.txs.unshift({ txid, category: 'send', amount: -h.amount, confirmations: 0, time: Math.floor(Date.now() / 1000), address: h.address });
     } else if (kind === 'note-send') {
       n.amount = round(n.amount - h.amount);
+      // To a hosted phone's member address (desktop v0.2.8): its wallet gets the notes.
+      for (const hp of this.hosted.values()) {
+        if (hp.memberAddress !== h.address) continue;
+        const got = hp.wallet.notes.find((x) => x.house === h.house);
+        if (got) got.amount = round(got.amount + h.amount);
+        else hp.wallet.notes.push({ ...n, amount: h.amount, demanded: 0, redeemable: h.amount });
+      }
     } else if (kind === 'note-redeem') {
       n.amount = round(n.amount - h.amount);
       n.redeemable = round(n.redeemable - h.amount);
@@ -316,18 +455,45 @@ export class MockDesktop {
   async onMessage(chan, f) {
     const req = await chan.rx.open(f.ct); // throws on bad ct -> channel killed
     const w = this.wallet;
-    this.requests.push({ id: req.id, m: req.m, a: req.a });
+    this.requests.push({ id: req.id, m: req.m, a: req.a, hosted: !!chan.hosted });
     this.log.push('req: ' + req.m);
     if (this.intercept?.(req, chan)) return;
     const ok = (v) => this.reply(chan, { id: req.id, ok: v });
     const err = (e) => this.reply(chan, { id: req.id, err: e });
+    if (chan.hosted) return this.onHostedMessage(chan.device, req, ok, err);
+    const faceId = (a) => a && typeof a.sig === 'string' && typeof a.ad === 'string';
     switch (req.m) {
+      case 'auth-start':
+        return ok(this.ownerPasskey ? { challenge: b64u(rand(32)), cred: 'Y3JlZC1pZA' } : { challenge: b64u(rand(32)) });
+      case 'houses-mine':
+        return ok(this.myHouses);
+      case 'invite': {
+        if (!this.myHouses.some((h) => h.house === req.a?.house)) return err('You don\'t run that house.');
+        if (!faceId(req.a?.auth)) return err('Add Face ID first.');
+        return ok({ url: this.makeInvite(req.a.house, chan.device), secs: 600 });
+      }
+      case 'allow': {
+        const a = this.allowAsks.get(req.a?.id);
+        if (!a || a.answer) return err('That ask is no longer waiting.');
+        if (req.a.decline === true) a.answer = 'declined';
+        else if (faceId(req.a.auth)) a.answer = 'allowed';
+        else return err("Face ID didn't check out. Try again.");
+        return ok({});
+      }
       case 'balance':
         return ok({ confirmed: w.confirmed, pending: w.pending });
       case 'history':
         return ok(w.txs.slice(0, Math.min(50, req.a?.count ?? 10)));
-      case 'receive':
-        return ok({ address: fakeAddress() });
+      case 'receive': {
+        const address = fakeAddress();
+        MockDesktop.addresses.set(address, this);
+        return ok({ address, members: this.memberAddresses });
+      }
+      // A phone moving a hosted wallet here says so first; the desktop says whether the address is its own.
+      case 'move-notice': {
+        this.log.push('move-notice: ' + req.a?.address);
+        return ok({ mine: MockDesktop.addresses.get(req.a?.address) === this });
+      }
       case 'status':
         return ok({ blocks: w.blocks, synced: true, limit_left: Math.round(w.limitLeft * 1e8) / 1e8, ...(this.credit ? { credit: true } : {}) });
       case 'approve': {
@@ -377,6 +543,106 @@ export class MockDesktop {
         h.expiry = setTimeout(() => this.expire(confirmId), this.holdExpiryMs);
         h.expiry.unref?.(); // a 10-minute timer must not keep a finished test run alive
         return;
+      }
+      default:
+        return err('unknown method');
+    }
+  }
+
+  /** A hosted phone's methods (PROTOCOL.md, "A hosted phone's methods"). */
+  onHostedMessage(hp, req, ok, err) {
+    const a = req.a ?? {};
+    const w = hp.wallet;
+    const faceId = (x) => x && typeof x.sig === 'string' && typeof x.ad === 'string';
+    const round = (v) => Math.round(v * 1e8) / 1e8;
+    if (req.m === 'status') {
+      return ok({ hosted: true, house: hp.house, house_name: hp.houseName, step: hp.step, ...(hp.why ? { why: hp.why } : {}),
+        blocks: this.wallet.blocks, synced: true, face_id: hp.passkey, credit: true });
+    }
+    if (req.m === 'auth-start') return ok(hp.passkey ? { challenge: b64u(rand(32)), cred: 'Y3JlZC1pZA' } : { challenge: b64u(rand(32)) });
+    if (req.m === 'passkey-add') {
+      if (typeof a.pk !== 'string' || typeof a.cred !== 'string' || !faceId(a)) return err('That passkey did not check out.');
+      hp.passkey = true;
+      return ok({});
+    }
+    if (req.m === 'auth') return ok({});
+    if (!hp.passkey) return err('Add Face ID first.');
+    if (hp.step === 'moved' || hp.step === 'moving') return err('This wallet has moved to your own computer.');
+    switch (req.m) {
+      case 'words':
+        return hp.step === 'words' ? ok({ words: hp.words }) : err('The words were shown already.');
+      case 'words-ok':
+        if (hp.step !== 'words') return err('Nothing to confirm.');
+        if (!faceId(a.auth)) return err("Face ID didn't check out. Try again.");
+        hp.step = 'joining';
+        setTimeout(() => hp.step === 'joining' && (hp.step = 'ready'), this.joinMs);
+        return ok({});
+      case 'balance':
+        return ok({ confirmed: w.confirmed, pending: w.pending });
+      case 'history':
+        return ok(w.txs.slice(0, Math.min(50, a.count ?? 10)));
+      case 'notes':
+        return ok(w.notes.filter((n) => n.amount > 0));
+      case 'houses':
+        return ok(this.wallet.houses);
+      case 'receive':
+        return ok({ address: hp.memberAddress });
+      case 'send':
+      case 'note-send':
+      case 'note-redeem': {
+        if (!faceId(a.auth)) return err("Face ID didn't check out. Try again.");
+        if (typeof a.amount !== 'number' || !(a.amount > 0)) return err('Invalid amount');
+        if (req.m !== 'note-redeem' && (typeof a.address !== 'string' || !a.address.startsWith('X'))) return err('Invalid address');
+        if (req.m === 'send') {
+          if (a.amount > w.confirmed) return err('Insufficient funds');
+          w.confirmed = round(w.confirmed - a.amount);
+        } else {
+          const n = w.notes.find((x) => x.house === a.house);
+          if (!n || a.amount > n.amount + 1e-12) return err('Not enough of those notes');
+          n.amount = round(n.amount - a.amount);
+          if (req.m === 'note-redeem') w.confirmed = round(w.confirmed + a.amount);
+        }
+        return ok({ txid: hex(rand(32)) });
+      }
+      case 'move-stop': {
+        if (!faceId(a.auth)) return err("Face ID didn't check out. Try again.");
+        if (hp.step !== 'moving' && hp.step !== 'failed') return err('No move is under way.');
+        hp.step = 'ready';
+        hp.why = null;
+        return ok({});
+      }
+      case 'move-home': {
+        if (!faceId(a.auth)) return err("Face ID didn't check out. Try again.");
+        if (hp.step !== 'ready') return err('The wallet isn\'t ready yet.');
+        if (typeof a.address !== 'string' || !a.address.startsWith('X')) return err('That isn\'t a valid FreeBank address.');
+        hp.step = 'moving';
+        hp.why = `Adding your computer's address to ${hp.houseName ?? 'the house'}…`;
+        hp.movedTo = a.address;
+        this.log.push('hosted: moving ' + hp.name + ' to ' + a.address);
+        setTimeout(() => {
+          hp.why = 'Sending your notes and coins…';
+          setTimeout(() => {
+            // The money lands at the new desktop when it is one of ours; the house's copy ends up empty.
+            const home = MockDesktop.addresses.get(a.address);
+            if (home) {
+              for (const n of w.notes.filter((x) => x.amount > 0)) {
+                const there = home.wallet.notes.find((x) => x.house === n.house);
+                if (there) there.amount = round(there.amount + n.amount);
+                else home.wallet.notes.push({ ...n });
+              }
+              home.wallet.confirmed = round(home.wallet.confirmed + w.confirmed);
+              if (!home.memberAddresses.some((m) => m.house === hp.house)) {
+                home.memberAddresses.push({ house: hp.house, name: hp.houseName, address: a.address });
+              }
+            }
+            w.notes = [];
+            w.confirmed = 0;
+            hp.step = 'moved';
+            hp.why = null;
+            this.log.push('hosted: moved ' + hp.name);
+          }, this.moveMs / 2);
+        }, this.moveMs / 2);
+        return ok({});
       }
       default:
         return err('unknown method');

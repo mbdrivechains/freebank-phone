@@ -24,6 +24,7 @@
   let destroyed = false;
   const MAX_RETRIES = 30;
   let open: string | null = null;
+  let mine: number | null = cache.mine;
 
   async function refresh() {
     if (loading) return;
@@ -36,6 +37,14 @@
       node = cache.node = s;
       starting = false;
       retries = 0;
+      // Desktop v0.2.8: whether this wallet runs a house to invite people to. Asked once a session; an older desktop
+      // doesn't know the call, and the button stays hidden.
+      if (s.credit && cache.mine === null) {
+        client.housesMine().then(
+          (l) => (mine = cache.mine = Array.isArray(l) ? l.length : 0),
+          () => (mine = cache.mine = 0),
+        );
+      }
     } catch (e) {
       clearTimeout(retry);
       if (e instanceof StartingError && retries < MAX_RETRIES) {
@@ -90,10 +99,11 @@
 </script>
 
 <script context="module" lang="ts">
-  const cache: { balance: Balance | null; txs: Tx[] | null; node: NodeStatus | null } = {
+  const cache: { balance: Balance | null; txs: Tx[] | null; node: NodeStatus | null; mine: number | null } = {
     balance: null,
     txs: null,
     node: null,
+    mine: null,
   };
 </script>
 
@@ -137,6 +147,10 @@
   </div>
   {#if node?.credit}
     <button class="full" data-testid="open-notes" on:click={() => dispatch('notes')}>Notes and houses</button>
+    <div class="actions">
+      <button data-testid="open-scanpay" on:click={() => dispatch('scanpay')}>Scan to pay</button>
+      {#if mine}<button data-testid="open-invite" on:click={() => dispatch('invite')}>Invite to my house</button>{/if}
+    </div>
   {/if}
 
   <div class="head">

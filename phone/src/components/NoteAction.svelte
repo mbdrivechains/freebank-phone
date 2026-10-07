@@ -13,6 +13,10 @@
   export let status: Status;
   export let holding: NoteHolding;
   export let kind: PaymentKind;
+  /** Scan to pay (desktop v0.2.8): a shop's payment code fills the address, and the amount unless it left it open. */
+  export let presetAddress = '';
+  export let presetAmount: number | null = null;
+  export let shop = '';
   const dispatch = createEventDispatcher<{ back: void }>();
 
   const name = holding.name ?? `House #${holding.house}`;
@@ -25,9 +29,10 @@
   // to two carrier outputs of 1000 sats.
   const EXTRA = 0.00102;
 
-  let address = '';
+  let address = presetAddress;
   // Fixed decimals: String(1e-7) would be "1e-7", which the amount field doesn't take.
-  let amountText = most.toFixed(8).replace(/\.?0+$/, '');
+  const fixed = (v: number) => v.toFixed(8).replace(/\.?0+$/, '');
+  let amountText = presetAddress ? (presetAmount !== null ? fixed(presetAmount) : '') : fixed(most);
   let limitLeft: number | null = null;
   let reviewing = false;
   let formError = '';
@@ -41,8 +46,9 @@
     asked = true;
     client.nodeStatus().then(
       (s) => {
-        limitLeft = s.limit_left;
-        faceIdSends = !!s.face_id_sends;
+        // A hosted phone (desktop v0.2.8) has no daily limit, and every payment takes Face ID.
+        limitLeft = s.limit_left ?? null;
+        faceIdSends = !!s.face_id_sends || !!s.hosted;
       },
       () => setTimeout(() => (asked = false), 5000),
     );
@@ -53,7 +59,7 @@
     checkingFaceId = true;
     try {
       const s = await client.nodeStatus();
-      faceIdSends = !!s.face_id_sends;
+      faceIdSends = !!s.face_id_sends || !!s.hosted;
       if (faceIdSends) {
         const c = await client.authStart('send');
         if (c.cred) sendCh = { ...c, at: Date.now() };
@@ -134,7 +140,13 @@
 
   {#if $noteFlow.k === 'form' && !reviewing}
     <form class="stack" on:submit|preventDefault={review}>
-      {#if kind === 'note-send'}
+      {#if kind === 'note-send' && presetAddress}
+        <div data-testid="pay-to">
+          <div class="muted small">Paying</div>
+          <div><strong>{shop || 'This address'}</strong></div>
+          <div class="mono wrap small">{address}</div>
+        </div>
+      {:else if kind === 'note-send'}
         <div>
           <label for="to">Send the notes to</label>
           <input id="to" class="mono" bind:value={address} placeholder="X…" autocomplete="off" autocapitalize="off"
@@ -149,7 +161,9 @@
         </div>
       </div>
       <p class="small" data-testid="note-explain">
-        {#if kind === 'note-send'}
+        {#if kind === 'note-send' && holding.type === 'members'}
+          Members only: this house's notes can go only to its members. The house owes them to whoever holds them.
+        {:else if kind === 'note-send'}
           The notes go to that address; the house owes them to whoever holds them.
         {:else if kind === 'note-redeem'}
           {#if holding.state === 'd'}
@@ -176,7 +190,7 @@
     <div class="card stack">
       <div class="big">{fmtEcx(amount ?? 0)} <span class="unit">ECX</span></div>
       <div class="muted small">{verb} {name}'s notes</div>
-      {#if kind === 'note-send'}<div><div class="muted small">To</div><div class="mono wrap">{address}</div></div>{/if}
+      {#if kind === 'note-send'}<div><div class="muted small">To</div>{#if shop}<div><strong>{shop}</strong></div>{/if}<div class="mono wrap">{address}</div></div>{/if}
       {#if overLimit}<p class="small warnbox">This is more than today's limit, so it waits for you to confirm it on your desktop.</p>{/if}
     </div>
     <button class="primary full" on:click={go} disabled={status !== 'connected' || checkingFaceId || (faceIdSends && !sendCh)}

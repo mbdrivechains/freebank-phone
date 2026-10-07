@@ -1,7 +1,16 @@
 /** Read `#pair=…` and strip it from the address bar at once. Null when there is none. */
 export function takePairFragment(): string | null {
-  if (!location.hash.startsWith('#pair=')) return null;
-  const v = location.hash.slice('#pair='.length);
+  return take('#pair=');
+}
+
+/** Read `#pay=…` (a payment link, desktop v0.2.8) and strip it from the address bar at once. Null when there is none. */
+export function takePayFragment(): string | null {
+  return take('#pay=');
+}
+
+function take(prefix: string): string | null {
+  if (!location.hash.startsWith(prefix)) return null;
+  const v = location.hash.slice(prefix.length);
   history.replaceState(history.state, '', location.pathname + location.search);
   return v || null;
 }

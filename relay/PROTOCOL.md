@@ -303,8 +303,8 @@ A desktop that answers these says so: `status` carries `"credit": true`. An olde
 
 | Method | Args | Result | Desktop calls |
 |---|---|---|---|
-| `notes` | — | a list of `{house, name, state, state_name, amount, demanded, redeemable, can_redeem, can_demand, rate_bps}` | `listmynotes`, `listhouses` |
-| `houses` | — | a list of `{house, name, state, state_name, ratio_bps, outstanding, reserves, attested_at, rate_bps}` | `listhouses` |
+| `notes` | — | a list of `{house, name, state, state_name, amount, demanded, redeemable, can_redeem, can_demand, rate_bps, type}` | `listmynotes`, `listhouses` |
+| `houses` | — | a list of `{house, name, state, state_name, ratio_bps, outstanding, reserves, attested_at, rate_bps, type}` | `listhouses` |
 | `note-send` | `{"house","address","amount"}` | as `send` | `transfernote` |
 | `note-redeem` | `{"house","amount"}` | as `send` | `redeemnote` |
 | `note-demand` | `{"house","amount"}` | as `send` | `demandnote` |
@@ -313,12 +313,17 @@ A desktop that answers these says so: `status` carries `"credit": true`. An olde
   (`o` open, `s` stressed, `d` suspended, `i` insolvent, `w` wound down) and `state_name` its name; `rate_bps` is the
   yearly rate on demands queued while a house is suspended (1000 = 10%). `redeemable` is what can be redeemed now
   (while suspended, only notes under demand).
+- **`type`** (desktop v0.2.6): who may hold a house's notes, from node v0.2.19's `listhouses`: `open` (anyone),
+  `members` (only the house's members; the node refuses a note sent to anyone else) or `redeem` (members only, and
+  notes pass only back to the house or onto the holder's own key, so the page offers no Send). A desktop before v0.2.6
+  leaves it out: read that as `open`.
 - **The note actions take the send's guard:** Face ID before each one when the phone chose it (`a.auth`, over a
   `for:"send"` challenge); the same daily limit, counted in ECX; held for the desktop above it (or with the wallet
   locked), with the same held and final replies; refused at once with the desktop app closed. The desktop pays them
   with the Notes tab's fee, 0.001 ECX. A redeem or a demand needs one holder's coins summing exactly to the amount;
-  when the node refuses one for that, the error says to send the notes to one of the owner's own addresses first.
-- **`notes` needs the wallet unlocked:** freebankd lists a wallet's notes only then. The desktop unlocks it for a moment
+  when the node refuses one for that, the error says to gather the notes first on the desktop (Notes, Send with the
+  address left empty).
+- **`notes` needs the wallet unlocked before node v0.2.19** (v0.2.19 lists them locked): freebankd lists a wallet's notes only then. The desktop unlocks it for a moment
   with the phone-send passphrase (as for a send) and locks it again; without that passphrase the phone hears to turn
   on "Let my phone send while FreeBank is open" on the desktop.
 - On the desktop, a held note action reads "<phone> wants to redeem 0.5 ECX of house #3's notes", with Redeem or
@@ -402,7 +407,144 @@ is on refuses payments rather than letting them through.
 **Note actions on the phone** count their fee and up to two 1000-sat carrier outputs against the phone's daily limit
 (0.00102 ECX each), as well as the notes.
 
+## Hosted wallets (app v0.2.8)
+
+In short, a shopkeeper
+gets a wallet of his own, with his own 24 words, kept on the house's desktop until he moves it to a computer of his.
+His phone reaches it through the relay like any phone. **A hosted phone acts for its own wallet only.** It is kept in
+its own list (`hosted.json`), not the owner's `devices.json`, and has its own set of methods. Nothing an owner's phone
+can do is open to it, and nothing here reaches the owner's wallet.
+
+### Inviting (an owner's phone)
+
+| Method | Args | Result |
+|---|---|---|
+| `houses-mine` | — | the members-only and redeem-only houses this wallet runs: `[{house, name, type}]` |
+| `invite` | `{"house", "auth"}` | `{"url": "https://<host>/#pair=…", "secs": 600}` |
+
+- `invite` needs the phone's own Face ID: a passkey, and `auth` over a `for:"invite"` challenge. A phone without a
+  passkey is refused ("Add Face ID first"). It also needs "Let my phone send while FreeBank is open" on, because
+  joining the house is signed by the desktop's wallet. Otherwise: "Turn on Let my phone send on your desktop first."
+- The invite is a one-time code `C`, as in pairing: 16 random bytes, single use, **10 minutes**, at most 4 live at
+  once. Its pairing JSON adds `"h": {"house": <id>, "name": "<house name>", "by": "<inviting phone's name>"}`.
+  `relay`, `room` and `d` are the desktop's as usual.
+- The house must be one `houses-mine` lists.
+
+### Joining (the shopkeeper's phone)
+
+1. The pair request is as in "Pairing", with `C` the invite's, and the plaintext adds `"hosted": true`. A hosted
+   request with an ordinary pairing code, or an ordinary one with an invite code, is refused.
+2. **The inviting phone allows it.** The desktop sends that phone's verified sessions
+   `{"allow": {"id", "name", "code": "042 917", "house", "challenge", "cred", "secs"}}`. The phone answers with the
+   request `allow`: `{"id", "auth"}` (Face ID over `challenge`) or `{"id", "decline": true}`. Desktop Settings ›
+   Phone shows the same ask, and Allow there works too. The first answer settles it (`{"allow-done": "<id>"}`). The
+   ask waits as long as the invite has left. At most **two** asks wait per invite (a third is refused), and each card
+   carries `"others"`: how many other phones opened the same invite. The page warns when it isn't 0 (security review
+   of v0.2.8, L4: someone who saw the QR).
+3. On allow the desktop replies `{"t":"paired"}` as in pairing, and starts making the wallet. The phone reconnects
+   with `hello`.
+
+### A hosted phone's methods
+
+A hosted phone must add a passkey before anything else. Until it has one, only `status`, `auth-start` (`for:"add"`) and
+`passkey-add` are answered. The other-phone approval of "A first Face ID" doesn't apply, because a hosted phone never
+approves the owner's payments. After that, the Face ID gate is as in "Face ID: passkeys".
+
+| Method | Args | Result | Desktop calls |
+|---|---|---|---|
+| `status` | — | `{"hosted": true, "house", "house_name", "step", "blocks", "synced", "face_id", "credit": true}` | `getblockchaininfo` |
+| `words` | — | `{"words": [24 strings]}` while `step` is `words`; refused after | — |
+| `words-ok` | `{"auth"}` | `{}`; `step` becomes `joining` | `addhousemembers` from the desktop's wallet |
+| `balance` | — | as `balance` | on the hosted wallet |
+| `history` | `{"count"}` | as `history` | on the hosted wallet |
+| `notes` | — | as `notes` | on the hosted wallet |
+| `houses` | — | as `houses` | `listhouses` |
+| `receive` | — | `{"address": "<member address>"}`: always the one member address | — |
+| `send`, `note-send`, `note-redeem` | as for an owner's phone, with `auth` **every time** | `{"txid"}` | on the hosted wallet, unlocked with its passphrase for the moment |
+| `move-home` | `{"address", "auth"}` | `{}`; `step` becomes `moving`, then `moved` | below, "Moving home" |
+| `move-stop` | `{"auth"}` | `{}`; a move that is `moving` or `failed` goes back to `ready` | — |
+
+- **`step`:** `setup` (the wallet is being made, about a minute, during which the node restarts once), `words` (the
+  words wait to be shown and confirmed), `joining` (until the member list shows the address active, one block or
+  more), `ready`, `moving` (the money is going to his own computer), `moved`. A failure gives `step: "failed"` and
+  `"why"`.
+- **Payments** need Face ID each time. There's no daily limit and nothing is held: it
+  is the shopkeeper's own money. `note-demand` isn't offered.
+- **After `moved`,** everything but `status` is refused: "This wallet has moved to your own computer."
+- **Amounts, errors and `starting`** are as for an owner's phone.
+- **Face ID purposes:** `invite` takes a `for:"invite"` challenge; `words-ok` and `move-home` take `for:"change"`;
+  payments take `for:"send"`, as for an owner's phone. The owner's `allow` answer is an assertion over the
+  `challenge` in the `allow` message itself (as `approve` works), with no `auth-start`.
+
+### Making the wallet (desktop)
+
+1. `createwallet hosted-<id>`, with `<id>` the phone's device id.
+2. `encryptwallet` with a random 32-byte passphrase (hex). The node stops and is started again.
+3. Fresh words (BIP39, 24); unlock; `sethdseed true <WIF>` with BIP85 index 0 of the words, as the app's own Setup
+   does, so the desktop app's "Restore from recovery words" makes the same wallet; check `hdmasterkeyid`.
+4. `getnewaddress "" legacy` gives the member address (the words' first address); lock.
+5. The passphrase and, until `words-ok`, the words' entropy are kept in `hosted-keys.json` (0600) beside
+   `hosted.json`. The entropy is wiped at `words-ok`.
+6. At `words-ok`: unlock the desktop's wallet with the phone-send passphrase, `addhousemembers <house> [address]
+   0.001`, then `sendtoaddress <address> 0.01` (a fee float: a note payment needs its fee and small carrier outputs,
+   which a wallet holding only notes can't fund; found in the end-to-end run), lock. If the node answers that a
+   member change for that house is already in this block, try again each block. A hosted payment the node can't fund
+   says so plainly ("Your wallet has no ECX left for this payment's fee…").
+
+### Moving home (to fresh words)
+
+Restoring the shop's words at home
+would leave the house's desktop, and its backups, with the same keys for good (security review of v0.2.8, M1). So the
+money moves to new words of the shopkeeper's own computer, and the house's copy ends up empty.
+
+1. He installs FreeBank on his computer and sets it up as anyone does, with new words of its own.
+2. On his phone, **Move to my own computer** scans that desktop's pairing QR (`#pair=`) and pairs as an owner's
+   phone (Face ID included), kept apart from the hosted pairing until it works.
+3. The phone asks the new desktop for `receive`, then tells it `move-notice {"address", "house_name"}`: the new
+   desktop shows the address and answers `{"mine": <its wallet's?>}` (a QR code from someone else's computer would
+   otherwise take the money; the re-review of v0.2.8, N3). Only if `mine`, the phone shows the address ("check that
+   your computer shows the same") and with Face ID sends the old host `move-home {"address", "auth"}`
+   (`for:"change"`). The house's desktop refuses its own keys and the hosted wallet's own address, and shows its
+   owner who is moving and the member it adds (N4). A move names its destination for good: a later `move-home`
+   (after `move-stop`) must name the same address, so a hosted phone can't add a string of members (final
+   re-review).
+4. The house's desktop, `step: "moving"`:
+   - checks the address (`validateaddress`) and adds it to the house (`addhousemembers`, signed as at joining);
+   - once the member list shows it active, each house's notes the wallet holds, one house at a time, each confirmed
+     before the next: sent (`transfernote <house> <all its units> 0.001 <address>`) where the address may hold them
+     (this house, an open house, another members-only house it belongs to), redeemed (`redeemnote`) where it may
+     not (a redeem-only house, or one it isn't a member of), and left in the copy, said in `why`, when neither works;
+   - the house tops up the wallet's ECX for fees (0.01, three times at most);
+   - then the rest of the ECX (`sendtoaddress <address> <balance> "" "" true`); under 0.0001 counts as nothing;
+   - `step: "moved"` once nothing that can move is left, confirmed. `why` says what it waits for. Six refusals in a
+     row turn it `failed`; the phone can `move-stop` it, and the desktop's Try again goes on with it (N1).
+   - After `moved`, the old member address is taken off the house (`removehousemembers`), and the old copy is
+     watched: money that reaches it later (the shop's old QR code) is sent on (N2). The page tells him to replace his
+     QR codes and to keep the old words.
+5. The phone, on `moved`, forgets the old host and stays with the new desktop. The new desktop's Receive shows that
+   address as his address at the house (below, "Member addresses").
+6. The house's desktop asks its owner whether to delete its copy, which now holds nothing. On yes it looks again (money
+   that arrived since is sent on first), then removes the phone and, at the node's next start, deletes the wallet file
+   and its passphrase: outright only once the old address is off the house (its removal confirmed and in effect);
+   until then the copy moves aside, passphrase included (final re-review). A copy that still holds money
+   (deleted without moving) moves aside instead, with its passphrase, into `<app data>/hosted-removed/`.
+
+### Member addresses (owners' phones and desktops)
+
+A members-only house's notes go only to its member addresses, and Receive makes a new address each time, which
+wouldn't be one. So the owner's `receive` adds the wallet's member addresses: `{"address", "members": [{"house",
+"name", "address"}]}`, one per members-only or redeem-only house where an address of this wallet is an active member
+(`listhousemembers`, checked against the wallet's addresses). The page shows "Your address at ‹house›" for being
+paid in that house's notes; the desktop's Receive does the same.
+
+### Payment links
+
+`https://<host>/#pay=<b64u JSON {"v":1, "a":"<address>", "h":<house>, "u":<ECX or null>, "n":"<shop name>"}>`.
+**Scan to pay** in the page reads one, or a bare FreeBank address, and fills a note payment. The page strips the
+fragment as it does `#pair=`. On iPhone the Camera opens such a link in Safari, not in the Home Screen icon, so payers
+scan from inside the page.
+
 ## Not in protocol v1
 
 - volunteer relays, peering, WebRTC;
-- the hosted wallet.
+- Web Push for hosted phones (a payment notification while the page is closed): after v0.2.8.

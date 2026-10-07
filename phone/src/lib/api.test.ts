@@ -3,7 +3,7 @@ import { get } from 'svelte/store';
 import { PhoneClient, DeniedError, LostError, HELD_EXPIRED, randomStartId, type Identity } from './api';
 import { createPaymentFlow } from './sendflow';
 import { OfflineError, type Transport } from './relay';
-import { b64u, exportPub, genKeyPair } from './crypto';
+import { b64u, buildPairFrame, exportPub, fromB64u, genKeyPair, parsePairLink } from './crypto';
 // @ts-ignore -- plain JS test helper
 import { MockDesktop, EXPIRED, RESTARTED, DECLINED } from '../../e2e/mock-desktop.mjs';
 
@@ -360,7 +360,9 @@ describe('notes and houses (desktop v0.2.5)', () => {
     client.start();
     expect((await client.nodeStatus()).credit).toBe(true);
     const notes = await client.notes();
-    expect(notes.map((n) => [n.house, n.state_name])).toEqual([[3, 'Open'], [4, 'Suspended']]);
+    expect(notes.map((n) => [n.house, n.state_name])).toEqual([[3, 'Open'], [4, 'Suspended'], [5, 'Open'], [6, 'Open']]);
+    // Node v0.2.19's house types pass through (absent: open).
+    expect(notes.map((n) => n.type ?? 'open')).toEqual(['open', 'open', 'members', 'redeem']);
     expect((await client.houses())[1]).toMatchObject({ house: 4, ratio_bps: 6000 });
 
     await client.pay({ kind: 'note-send', house: 3, address: 'Xabc', amount: 0.1 });
@@ -464,3 +466,145 @@ describe('approve on my phone (desktop v0.2.5)', () => {
   });
 });
 
+
+describe('hosted wallets (desktop v0.2.8)', () => {
+  const faceId = { ad: 'YWQ', cdj: 'Y2Rq', sig: 'c2ln' };
+  const WAIT = { setupMs: 50, joinMs: 50 };
+
+  /** An owner phone that runs house 5, and the invite URL it gets. */
+  async function ownerWithInvite(desk: any) {
+    const relay = new FakeRelay(desk);
+    client = new PhoneClient(await pairedPhone(desk), relay.connect, fast);
+    client.start();
+    expect(await client.housesMine()).toEqual([{ house: 5, name: 'Lanark Co-op', type: 'members' }]);
+    const r = await client.invite(5, faceId);
+    expect(r.secs).toBe(600);
+    expect(lastRequest(desk, 'invite').a).toEqual({ house: 5, auth: faceId });
+    return { relay, link: await parsePairLink(r.url.split('#pair=')[1]) };
+  }
+
+  /** The shopkeeper's phone sends its hosted pair request; returns its identity and the desktop's answers. */
+  async function joinRequest(desk: any, link: any, name = 'Corner Shop') {
+    const P = await genKeyPair(false);
+    const E = await genKeyPair(false);
+    const pPub = await exportPub(P.publicKey);
+    const frame = await buildPairFrame({ e: E, dPub: fromB64u(link.d), c: fromB64u(link.c), pPub, name, hosted: true });
+    const answers: string[] = [];
+    desk.channel((f: any) => answers.push(f.t), () => {}).onFrame(frame);
+    return { id: { pPriv: P.privateKey, pPub: b64u(pPub), d: desk.dPub } as Identity, answers };
+  }
+
+  it('an invite carries the house; the inviting phone allows the joiner with Face ID', async () => {
+    const desk = await MockDesktop.create({ myHouses: [{ house: 5, name: 'Lanark Co-op', type: 'members' }], ownerPasskey: true, ...WAIT });
+    const { link } = await ownerWithInvite(desk);
+    expect(link.h).toEqual({ house: 5, name: 'Lanark Co-op', by: 'test' });
+    const join = await joinRequest(desk, link);
+    await until(() => get(client!.allows).length === 1);
+    const ask = get(client!.allows)[0];
+    expect(ask.name).toBe('Corner Shop');
+    expect(ask.code).toMatch(/^\d{3} \d{3}$/);
+    expect(ask.house).toBe(5);
+    await client!.allow(ask.id, faceId);
+    expect(lastRequest(desk, 'allow').a).toEqual({ id: ask.id, auth: faceId });
+    await until(() => join.answers.length === 1);
+    expect(join.answers).toEqual(['paired']);
+    await until(() => get(client!.allows).length === 0); // allow-done
+    expect(desk.hosted.size).toBe(1);
+    expect(desk.devices.size).toBe(1); // the owner's list is untouched
+  });
+
+  it('declining refuses the joiner; an invite works once', async () => {
+    const desk = await MockDesktop.create({ myHouses: [{ house: 5, name: 'Lanark Co-op', type: 'members' }], ...WAIT });
+    const { link } = await ownerWithInvite(desk);
+    const first = await joinRequest(desk, link);
+    await until(() => get(client!.allows).length === 1);
+    await client!.declineAllow(get(client!.allows)[0].id);
+    await until(() => first.answers.length === 1);
+    expect(first.answers).toEqual(['pair-refused']);
+    expect(desk.hosted.size).toBe(0);
+  });
+
+  it("a hosted phone: Face ID first, then the words, joining, ready; its own wallet; then moved", async () => {
+    const desk = await MockDesktop.create({ myHouses: [{ house: 5, name: 'Lanark Co-op', type: 'members' }], ...WAIT });
+    const { link } = await ownerWithInvite(desk);
+    const join = await joinRequest(desk, link);
+    await until(() => get(client!.allows).length === 1);
+    desk.answerAllow(get(client!.allows)[0].id, true);
+    await until(() => join.answers.length === 1);
+
+    client2 = new PhoneClient(join.id, new FakeRelay(desk).connect, fast);
+    client2.start();
+    let st = await client2.nodeStatus();
+    expect(st).toMatchObject({ hosted: true, house: 5, house_name: 'Lanark Co-op', face_id: false });
+    // Nothing but Face ID until it has a passkey.
+    await expect(client2.balance()).rejects.toThrow(/Face ID first/);
+    expect((await client2.authStart('add')).cred).toBeUndefined();
+    await client2.passkeyAdd('cGs', 'Y3JlZA', true, faceId);
+    await until(() => desk.hosted.values().next().value.step === 'words');
+    st = await client2.nodeStatus();
+    expect(st.step).toBe('words');
+    const { words } = await client2.words();
+    expect(words).toHaveLength(24);
+    await client2.wordsOk(faceId);
+    await expect(client2.words()).rejects.toThrow(/shown already/);
+    expect((await client2.nodeStatus()).step).toBe('joining');
+    await until(() => desk.hosted.values().next().value.step === 'ready');
+
+    // Paid by the owner in house 5's notes, at the member address.
+    const { address } = await client2.receive();
+    expect(address).toBe((await client2.receive()).address); // always the one member address
+    await client!.pay({ kind: 'note-send', house: 5, address, amount: 0.05 });
+    expect((await client2.notes()).find((n) => n.house === 5)?.amount).toBe(0.05);
+    // A payment needs Face ID every time.
+    await expect(client2.pay({ kind: 'note-send', house: 5, address: 'X' + 'a'.repeat(33), amount: 0.01 })).rejects.toThrow(/Face ID/);
+    await client2.pay({ kind: 'note-send', house: 5, address: 'X' + 'a'.repeat(33), amount: 0.01 }, undefined, faceId);
+    expect(desk.requests.filter((r: any) => r.hosted).every((r: any) => r.m !== 'invite')).toBe(true);
+
+    // Moving home (to fresh words): the money goes to the address the phone's new desktop gives.
+    const home = await MockDesktop.create({ moveMs: 60 });
+    const relayHome = new FakeRelay(home);
+    const client3 = new PhoneClient(await pairedPhone(home), relayHome.connect, fast);
+    client3.start();
+    const there = await client3.receive();
+    expect(there.members).toEqual([]);
+    const homeHad = (await client3.notes()).find((n) => n.house === 5)?.amount ?? 0;
+    await expect(client2.moveHome(there.address, { ad: 'YWQ', cdj: 'Y2Rq' } as any)).rejects.toThrow(/Face ID/);
+    await client2.moveHome(there.address, faceId);
+    expect(lastRequest(desk, 'move-home').a).toEqual({ address: there.address, auth: faceId });
+    expect((await client2.nodeStatus()).step).toBe('moving');
+    await expect(client2.balance()).rejects.toThrow(/moved to your own computer/);
+    await until(() => desk.hosted.values().next().value.step === 'moved');
+    expect((await client2.nodeStatus()).step).toBe('moved');
+    // At home: the notes arrived, and Receive names the member address.
+    expect(Math.round((((await client3.notes()).find((n) => n.house === 5)?.amount ?? 0) - homeHad) * 1e8) / 1e8).toBe(0.04);
+    expect((await client3.receive()).members).toEqual([{ house: 5, name: 'Lanark Co-op', address: there.address }]);
+    client3.stop();
+  });
+
+  it('two asks at most per invite, each card saying how many others opened it', async () => {
+    const desk = await MockDesktop.create({ myHouses: [{ house: 5, name: 'Lanark Co-op', type: 'members' }], ...WAIT });
+    const { link } = await ownerWithInvite(desk);
+    await joinRequest(desk, link, 'Corner Shop');
+    await until(() => get(client!.allows).length === 1);
+    expect(get(client!.allows)[0]).toMatchObject({ others: 0, house_name: 'Lanark Co-op' });
+    await joinRequest(desk, link, 'Someone Else');
+    await until(() => get(client!.allows).length === 2 && get(client!.allows).every((a) => a.others === 1));
+    const third = await joinRequest(desk, link, 'A Third');
+    await until(() => third.answers.length === 1);
+    expect(third.answers).toEqual(['pair-refused']);
+  });
+
+  it('a hosted phone has none of the owner calls', async () => {
+    const desk = await MockDesktop.create({ myHouses: [{ house: 5, name: 'Lanark Co-op', type: 'members' }], ...WAIT });
+    const { link } = await ownerWithInvite(desk);
+    const join = await joinRequest(desk, link);
+    await until(() => get(client!.allows).length === 1);
+    desk.answerAllow(get(client!.allows)[0].id, true);
+    await until(() => join.answers.length === 1);
+    client2 = new PhoneClient(join.id, new FakeRelay(desk).connect, fast);
+    client2.start();
+    await client2.passkeyAdd('cGs', 'Y3JlZA', true, faceId);
+    await expect(client2.housesMine()).rejects.toThrow(/unknown method/);
+    await expect(client2.invite(5, faceId)).rejects.toThrow(/unknown method/);
+  });
+});

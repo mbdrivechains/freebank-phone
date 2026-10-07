@@ -44,6 +44,8 @@
       }
       link = l;
       pairValue = value;
+      // An invite (desktop v0.2.8): the name goes on the shop's payment codes, so ask for it rather than the phone's.
+      if (l.h) name = '';
       state = 'form';
     } catch (e) {
       message = (e as Error).message;
@@ -198,10 +200,17 @@
             Keep <strong>Open as Web App</strong> on if your iPhone shows it.
           </li>
           <li>Open <strong>FreeBank</strong> from your Home Screen.</li>
-          <li>
-            Tap <strong>Scan the code on your desktop</strong> and scan this same QR code again. It works for 5 minutes
-            from when you clicked Pair a phone; after that, click <strong>Pair a phone</strong> again for a new one.
-          </li>
+          {#if link?.h}
+            <li>
+              Tap <strong>Scan the code on your desktop</strong> and scan this same invite QR code again. It works for 10
+              minutes; after that, ask {link.h.by} for a new invite.
+            </li>
+          {:else}
+            <li>
+              Tap <strong>Scan the code on your desktop</strong> and scan this same QR code again. It works for 5 minutes
+              from when you clicked Pair a phone; after that, click <strong>Pair a phone</strong> again for a new one.
+            </li>
+          {/if}
         </ol>
         {#if pairValue}
           <p class="muted small">
@@ -213,19 +222,34 @@
       <button class="full" on:click={() => (pairHere = true)}>Pair in this browser instead</button>
     {:else}
       <form class="card stack" on:submit|preventDefault={pair}>
-        <h2>Pair this phone</h2>
+        {#if link?.h}
+          <h2 data-testid="join-title">Join {link.h.name}</h2>
+          <p>
+            <strong>{link.h.by}</strong> invited you to keep a FreeBank wallet at {link.h.name}: a wallet of your own, with
+            your own recovery words, kept on their desktop until you move it to a computer of yours. Then you can be paid
+            in {link.h.name}'s notes.
+          </p>
+        {:else}
+          <h2>Pair this phone</h2>
+        {/if}
         {#if alreadyPaired}
-          <p class="small warn">This phone is already paired with a desktop. Pairing again replaces it.</p>
+          <p class="small warn">This phone is already paired with a desktop. {link?.h ? 'Joining' : 'Pairing again'} replaces it.</p>
         {/if}
         {#if homeFirst}
           <p class="muted small">This browser and the Home Screen app pair separately: each is its own phone on your desktop.</p>
         {/if}
         <div>
-          <label for="devname">Name for this phone</label>
-          <input id="devname" bind:value={name} maxlength="40" autocomplete="off" autocapitalize="words" enterkeyhint="go" />
-          <p class="muted small hint">Your desktop shows this name when it asks you to allow the phone.</p>
+          {#if link?.h}
+            <label for="devname">Your name, or your shop's</label>
+            <input id="devname" bind:value={name} maxlength="40" autocomplete="off" autocapitalize="words" enterkeyhint="go" placeholder="Corner Shop" />
+            <p class="muted small hint">{link.h.by} sees it when they let you in, and your payment QR codes show it.</p>
+          {:else}
+            <label for="devname">Name for this phone</label>
+            <input id="devname" bind:value={name} maxlength="40" autocomplete="off" autocapitalize="words" enterkeyhint="go" />
+            <p class="muted small hint">Your desktop shows this name when it asks you to allow the phone.</p>
+          {/if}
         </div>
-        <button class="primary full" type="submit">Pair</button>
+        <button class="primary full" type="submit">{link?.h ? 'Join' : 'Pair'}</button>
         <button class="full" type="button" on:click={again}>Back</button>
       </form>
     {/if}
@@ -233,7 +257,12 @@
     <div class="card stack center" data-testid="pair-waiting">
       <span class="spinner"></span>
       {#if state === 'connecting'}
-        <p>Reaching your desktop…</p>
+        <p>{link?.h ? `Reaching ${link.h.name}…` : 'Reaching your desktop…'}</p>
+      {:else if link?.h}
+        <h2>Check {link.h.by}'s phone</h2>
+        <p class="codeline" data-testid="pair-code">Check that {link.h.by}'s phone shows <strong class="code">{code}</strong></p>
+        <p>{link.h.by} is asked to let <strong>{name}</strong> join. They allow it only if their phone shows the same code.</p>
+        <p class="muted small">Keep this page open.</p>
       {:else}
         <h2>Check your desktop</h2>
         <p class="codeline" data-testid="pair-code">Check that your desktop shows <strong class="code">{code}</strong></p>
@@ -244,8 +273,12 @@
     </div>
   {:else if state === 'refused'}
     <div class="card stack">
-      <h2>Not paired</h2>
-      <p>The desktop said no, or the QR code expired (it lasts 5 minutes). On your desktop, click <strong>Pair a phone</strong> for a new QR code and scan it.</p>
+      <h2>{link?.h ? 'Not joined' : 'Not paired'}</h2>
+      {#if link?.h}
+        <p>{link.h.by} said no, or the invite expired (it lasts 10 minutes). Ask for a new invite and scan it.</p>
+      {:else}
+        <p>The desktop said no, or the QR code expired (it lasts 5 minutes). On your desktop, click <strong>Pair a phone</strong> for a new QR code and scan it.</p>
+      {/if}
       <button class="full" on:click={again}>Back</button>
     </div>
   {:else if state === 'error'}

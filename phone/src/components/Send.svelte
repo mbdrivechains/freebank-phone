@@ -27,8 +27,8 @@
     asked = true;
     client.nodeStatus().then(
       (s) => {
-        limitLeft = s.limit_left;
-        faceIdSends = !!s.face_id_sends;
+        limitLeft = s.limit_left ?? null;
+        faceIdSends = !!s.face_id_sends || !!s.hosted;
       },
       // Ask again in a while, not at once: a desktop that refuses would get a request per refusal (review note).
       () => setTimeout(() => (asked = false), 5000),
@@ -43,7 +43,7 @@
     checkingFaceId = true;
     try {
       const s = await client.nodeStatus();
-      faceIdSends = !!s.face_id_sends;
+      faceIdSends = !!s.face_id_sends || !!s.hosted;
       if (faceIdSends) {
         const c = await client.authStart('send');
         if (c.cred) sendCh = { ...c, at: Date.now() };
