@@ -338,6 +338,8 @@ async function runEngine(name) {
     await shot(page, 'not-paired');
     check('not-paired screen', true);
     check('ask: the ? shows before pairing', (await page.getByTestId('ask-btn').count()) === 1);
+    const version = JSON.parse(readFileSync(resolve(here, '../package.json'), 'utf8')).version;
+    check('the footer shows the page version', (await page.getByTestId('version').textContent()).trim() === `FreeBank phone page v${version}`);
 
     // 2. Pairing link.
     const link = desk.pairingLink(wsUrl, origin);

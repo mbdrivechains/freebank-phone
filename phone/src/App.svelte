@@ -34,6 +34,8 @@
   const loadTokens = () => import('./components/Tokens.svelte');
   // Ask FreeBank (phone page v0.4.6), the header's ?: its code and the recovery-word list load only when it opens.
   const loadAsk = () => import('./components/Ask.svelte');
+  // The page's version (package.json, set at build): the app release it goes with.
+  const pageVersion = __PAGE_VERSION__;
 
   type Screen =
     | 'loading' | 'pair' | 'home' | 'receive' | 'send' | 'settings' | 'notes' | 'houses' | 'note'
@@ -347,6 +349,7 @@
 {#if !reporting && !asking && screen !== 'loading'}
   <footer>
     <button class="plain small muted" on:click={() => (reporting = true)}>Report a problem or suggest something</button>
+    <p class="muted small version" data-testid="version">FreeBank phone page v{pageVersion}</p>
   </footer>
 {/if}
 
@@ -354,6 +357,9 @@
   footer {
     margin-top: 24px;
     text-align: center;
+  }
+  .version {
+    margin: 4px 0 0;
   }
   header {
     display: flex;
