@@ -1,6 +1,6 @@
 // Payment links (relay/PROTOCOL.md, "Hosted wallets", desktop v0.2.8): a shop's QR code says where to pay, in which
 // house's notes, how much (or leaves the amount to the payer) and the shop's name.
-//   https://<host>/#pay=<b64u JSON {"v":1, "a":"<address>", "h":<house>, "u":<ECX or null>, "n":"<shop name>"}>
+//   https://<host>/#pay=<b64u JSON {"v":1, "a":"<address>", "h":<house>, "u":<sECX or null>, "n":"<shop name>"}>
 // "Scan to pay" reads one, or a bare FreeBank address.
 import { b64u, cleanText, fromB64u, utf8 } from './crypto';
 
@@ -8,7 +8,7 @@ export interface PayRequest {
   address: string;
   /** The house whose notes to pay in; null for a bare address (the payer picks). */
   house: number | null;
-  /** ECX; null leaves the amount to the payer. */
+  /** sECX; null leaves the amount to the payer. */
   amount: number | null;
   /** The shop's name, cleaned for showing; empty when none. */
   name: string;
@@ -19,7 +19,7 @@ export const ADDRESS_RE = /^X[1-9A-HJ-NP-Za-km-z]{24,40}$/;
 
 const NOT_A_PAYMENT = "That isn't a FreeBank payment code. Scan the shop's payment QR code, or paste its link or address.";
 
-/** The most anyone can ask for in one payment: ECX's supply (21 million), so a crafted amount can't overflow. */
+/** The most anyone can ask for in one payment: ECX's supply (21 million), which bounds sECX's, so a crafted amount can't overflow. */
 const MAX_ECX = 21_000_000;
 
 function amountOf(u: unknown): number | null {

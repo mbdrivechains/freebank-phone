@@ -57,8 +57,8 @@
         </div>
         <dl class="small">
           {#if h.ratio_bps !== null}<div><dt>Reserve ratio</dt><dd>{(h.ratio_bps / 100).toFixed(0)}%</dd></div>{/if}
-          <div><dt>Notes out</dt><dd>{fmtEcx(h.outstanding)} ECX</dd></div>
-          {#if h.reserves !== null}<div><dt>Reserves</dt><dd>{fmtEcx(h.reserves)} ECX</dd></div>{/if}
+          <div><dt>Notes out</dt><dd>{fmtEcx(h.outstanding)} sECX</dd></div>
+          {#if h.reserves !== null}<div><dt>Reserves</dt><dd>{fmtEcx(h.reserves)} sECX</dd></div>{/if}
           {#if h.attested_at}<div><dt>Last checked</dt><dd>block {h.attested_at.toLocaleString()}</dd></div>{/if}
           {#if h.state === 'd' && h.rate_bps}<div><dt>Demands earn</dt><dd>{h.rate_bps / 100}% a year</dd></div>{/if}
         </dl>

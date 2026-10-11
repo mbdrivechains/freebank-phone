@@ -1,4 +1,4 @@
-// ECX display and input. ECX only: never grams or gold.
+// sECX display and input. sECX only: never grams or gold.
 
 /** 12.5 -> "12.50", 0.00012 -> "0.00012", at most 8 decimals. */
 export function fmtEcx(n: number): string {

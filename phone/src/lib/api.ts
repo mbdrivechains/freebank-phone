@@ -76,7 +76,7 @@ export interface MemberAddress {
   address: string;
 }
 
-/** A house's notes this wallet holds (desktop v0.2.5, `notes`). Amounts are ECX: one note unit is one sat. */
+/** A house's notes this wallet holds (desktop v0.2.5, `notes`). Amounts are sECX: one note unit is one sat. */
 export interface NoteHolding {
   house: number;
   name: string | null;
@@ -127,7 +127,7 @@ export interface HouseInfo {
 export interface ApprovalAsk {
   id: string;
   what: 'send' | 'action' | 'change' | 'scheduled';
-  /** ECX: a send's amount, an action's cost, a scheduled change's new amount (null: off) */
+  /** sECX: a send's amount, an action's cost, a scheduled change's new amount (null: off) */
   amount: number | null;
   address: string;
   text: string | null;
@@ -141,7 +141,7 @@ export interface ApprovalAsk {
   deadline: number;
 }
 
-/** A payment from this phone: ECX (`send`), or a house's notes sent, redeemed or demanded. */
+/** A payment from this phone: sECX (`send`), or a house's notes sent, redeemed or demanded. */
 export type PaymentKind = 'send' | 'note-send' | 'note-redeem' | 'note-demand';
 export interface Payment {
   kind: PaymentKind;
@@ -588,7 +588,7 @@ export class PhoneClient {
   /** `auth`: Face ID over a `for: "send"` challenge, when this phone chose Face ID before each send. */
   send = (address: string, amount: number, onHeld?: (confirmId: string, why: HeldWhy) => void, auth?: AssertionParts) =>
     this.pay({ kind: 'send', address, amount }, onHeld, auth);
-  /** A payment: ECX, or (desktop v0.2.5) a house's notes. The same guard as a send: Face ID when chosen, the daily
+  /** A payment: sECX, or (desktop v0.2.5) a house's notes. The same guard as a send: Face ID when chosen, the daily
    * limit, the desktop's approval above it. */
   pay = (p: Payment, onHeld?: (confirmId: string, why: HeldWhy) => void, auth?: AssertionParts) => {
     const a: Record<string, unknown> = { amount: p.amount };

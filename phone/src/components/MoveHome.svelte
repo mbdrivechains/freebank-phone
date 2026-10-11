@@ -282,8 +282,8 @@
       <p class="addr mono" data-testid="move-target">{target}</p>
       <p class="small">
         Your computer now shows this address too: check they match. {houseName} adds it to its members, then sends your
-        notes and coins there. Notes of another house that your computer can't hold are redeemed for ECX first, and
-        the ECX follows.
+        notes and coins there. Notes of another house that your computer can't hold are redeemed for sECX first, and
+        the sECX follows.
       </p>
       <button class="primary full" on:click={tell} disabled={busy || status !== 'connected'}>Move my money with Face ID</button>
       {#if status !== 'connected'}<p class="muted small">Waiting to reach {houseName}…</p>{/if}

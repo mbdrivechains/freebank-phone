@@ -63,7 +63,7 @@
     {#if scheduled}
       <h2 id="approve-title">Your recovery words were used</h2>
       <p class="muted small">On your desktop, instead of this phone:</p>
-      <p><strong>{ask.amount === null ? 'Turn "Approve sends on my phone" off' : `Ask your phones only over ${fmtEcx(ask.amount)} ECX a day`}</strong></p>
+      <p><strong>{ask.amount === null ? 'Turn "Approve sends on my phone" off' : `Ask your phones only over ${fmtEcx(ask.amount)} sECX a day`}</strong></p>
       <p class="small">
         It happens in {waits(left)} unless you cancel it. If it wasn't you, cancel it and check your desktop. If someone
         may have your recovery words, move your coins to new words.
@@ -74,12 +74,12 @@
       <h2 id="approve-title">Approve on this phone?</h2>
       {#if ask.what === 'send'}
         <p class="muted small">Your desktop wants to send</p>
-        <div class="big">{fmtEcx(ask.amount ?? 0)} <span class="unit">ECX</span></div>
+        <div class="big">{fmtEcx(ask.amount ?? 0)} <span class="unit">sECX</span></div>
         <div><div class="muted small">To</div><div class="mono wrap">{ask.address}</div></div>
       {:else if ask.what === 'action'}
         <p class="muted small">Your desktop wants to</p>
         <p><strong class="wrap">{ask.text}</strong></p>
-        {#if ask.amount !== null}<p class="small">It costs this wallet {fmtEcx(ask.amount)} ECX, fees included.</p>{/if}
+        {#if ask.amount !== null}<p class="small">It costs this wallet {fmtEcx(ask.amount)} sECX, fees included.</p>{/if}
       {:else}
         <p class="muted small">Your desktop asks:</p>
         <p><strong class="wrap">{ask.text}</strong></p>

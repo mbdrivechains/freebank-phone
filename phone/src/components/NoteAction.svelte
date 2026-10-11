@@ -79,8 +79,8 @@
     formError = '';
     const a = address.trim();
     if (kind === 'note-send' && !/^[A-Za-z0-9]{20,100}$/.test(a)) formError = 'Enter the address you are sending the notes to (it starts with X).';
-    else if (amount === null) formError = 'Enter an amount in ECX, like 0.05 (up to 8 decimals).';
-    else if (amount > most + 1e-12) formError = `You can ${verb.toLowerCase()} at most ${fmtEcx(most)} ECX of these notes.`;
+    else if (amount === null) formError = 'Enter an amount in sECX, like 0.05 (up to 8 decimals).';
+    else if (amount > most + 1e-12) formError = `You can ${verb.toLowerCase()} at most ${fmtEcx(most)} sECX of these notes.`;
     if (formError) return;
     address = a;
     reviewing = true;
@@ -134,7 +134,7 @@
   {#if $noteFlow.k === 'form'}
     <div class="card stack">
       <div class="muted small">{name} · house #{holding.house} · {holding.state_name}</div>
-      <div>You hold <strong>{fmtEcx(holding.amount)} ECX</strong> of its notes{holding.demanded > 0 ? `, ${fmtEcx(holding.demanded)} ECX under demand` : ''}.</div>
+      <div>You hold <strong>{fmtEcx(holding.amount)} sECX</strong> of its notes{holding.demanded > 0 ? `, ${fmtEcx(holding.demanded)} sECX under demand` : ''}.</div>
     </div>
   {/if}
 
@@ -157,7 +157,7 @@
         <label for="amt">Amount of notes</label>
         <div class="amtwrap">
           <input id="amt" bind:value={amountText} inputmode="decimal" placeholder="0.00" autocomplete="off" enterkeyhint="done" />
-          <span class="unit">ECX</span>
+          <span class="unit">sECX</span>
         </div>
       </div>
       <p class="small" data-testid="note-explain">
@@ -169,7 +169,7 @@
           {#if holding.state === 'd'}
             While the house is suspended, only notes under demand can be redeemed, with their interest.
           {:else}
-            The house pays you ECX for them, one for one, from its reserves.
+            The house pays you sECX for them, one for one, from its reserves.
           {/if}
         {:else if holding.state === 'd'}
           Your notes join the house's payout queue and earn {holding.rate_bps ? `${holding.rate_bps / 100}%` : 'interest'} a year from today. They can't be sent while they wait.
@@ -180,21 +180,21 @@
         {/if}
       </p>
       <p class="muted small">
-        Fee 0.001 ECX.
-        {#if limitLeft !== null}This phone can move up to {fmtEcx(limitLeft)} ECX more today, fees included; more waits for your desktop.{/if}
+        Fee 0.001 sECX.
+        {#if limitLeft !== null}This phone can move up to {fmtEcx(limitLeft)} sECX more today, fees included; more waits for your desktop.{/if}
       </p>
       {#if formError}<p class="error small">{formError}</p>{/if}
       <button class="primary full" type="submit" disabled={status !== 'connected'}>Review</button>
     </form>
   {:else if $noteFlow.k === 'form' && reviewing}
     <div class="card stack">
-      <div class="big">{fmtEcx(amount ?? 0)} <span class="unit">ECX</span></div>
+      <div class="big">{fmtEcx(amount ?? 0)} <span class="unit">sECX</span></div>
       <div class="muted small">{verb} {name}'s notes</div>
       {#if kind === 'note-send'}<div><div class="muted small">To</div>{#if shop}<div><strong>{shop}</strong></div>{/if}<div class="mono wrap">{address}</div></div>{/if}
       {#if overLimit}<p class="small warnbox">This is more than today's limit, so it waits for you to confirm it on your desktop.</p>{/if}
     </div>
     <button class="primary full" on:click={go} disabled={status !== 'connected' || checkingFaceId || (faceIdSends && !sendCh)}
-      >{faceIdSends ? `${verb} with Face ID` : `${verb} ${fmtEcx(amount ?? 0)} ECX`}</button
+      >{faceIdSends ? `${verb} with Face ID` : `${verb} ${fmtEcx(amount ?? 0)} sECX`}</button
     >
     {#if authError}<p class="error small">{authError}</p>{/if}
     <button class="full" on:click={() => (reviewing = false)}>Change</button>
@@ -211,7 +211,7 @@
   {:else if $noteFlow.k === 'done'}
     <div class="card stack" data-testid="note-receipt">
       <div class="ok">✓ {done}</div>
-      <div class="big">{fmtEcx($noteFlow.amount)} <span class="unit">ECX</span></div>
+      <div class="big">{fmtEcx($noteFlow.amount)} <span class="unit">sECX</span></div>
       {#if $noteFlow.address}<div><div class="muted small">To</div><div class="mono wrap">{$noteFlow.address}</div></div>{/if}
       <div>
         <div class="muted small">Transaction ID</div>

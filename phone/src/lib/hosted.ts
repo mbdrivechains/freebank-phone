@@ -37,7 +37,7 @@ export function confirmMatches(words: string[], positions: number[], answers: st
   return positions.length > 0 && positions.every((p, i) => (answers[i] ?? '').trim().toLowerCase() === (words[p] ?? '').trim().toLowerCase());
 }
 
-/** What the Shop screen watches: this house's notes only, as the desktop lists them (confirmed). ECX and payments
+/** What the Shop screen watches: this house's notes only, as the desktop lists them (confirmed). sECX and payments
  *  still on their way don't count, so a payment that is never confirmed, or money from someone else, can't mark a
  *  sale paid (security review of v0.2.8, L6). */
 export function heldValue(notes: NoteHolding[] | null, house: number): number {
@@ -53,7 +53,7 @@ export function isPaid(before: number, now: number, amount: number): boolean {
 /** The day's takings, kept on this phone only: by local date, newest first. */
 export interface Taking {
   at: number; // ms
-  amount: number; // ECX
+  amount: number; // sECX
 }
 
 const TAKINGS = 'freebank-takings';

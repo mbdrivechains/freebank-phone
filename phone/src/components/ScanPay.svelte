@@ -107,7 +107,7 @@
         <p>Pay <strong>{req.name || 'this address'}</strong> in which house's notes?</p>
         <p class="mono small wrap">{req.address}</p>
         {#each holdings as h}
-          <button class="full" on:click={() => { holding = h; state = 'pay'; }}>{houseLabel(h)} · {fmtEcx(h.amount - h.demanded)} ECX</button>
+          <button class="full" on:click={() => { holding = h; state = 'pay'; }}>{houseLabel(h)} · {fmtEcx(h.amount - h.demanded)} sECX</button>
         {/each}
       </div>
     {:else}

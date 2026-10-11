@@ -1,5 +1,5 @@
 // The state of a payment in progress. Lives outside the screens so leaving one (back button) does not lose a payment
-// that is waiting for the desktop. `sendFlow` is ECX from the Send screen; `noteFlow` is a house's notes (v0.2.5).
+// that is waiting for the desktop. `sendFlow` is sECX from the Send screen; `noteFlow` is a house's notes (v0.2.5).
 import { writable } from 'svelte/store';
 import { LostError, type AssertionParts, type HeldWhy, type Payment, type PaymentKind, type PhoneClient } from './api';
 

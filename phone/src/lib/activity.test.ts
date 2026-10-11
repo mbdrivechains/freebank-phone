@@ -16,7 +16,8 @@ describe('recent activity', () => {
     expect(mask('ether 3c:22:fb:01:9a:7e')).toBe('ether <ip>');
     // Short ids, any address prefix, amounts, passwords in URLs.
     expect(mask('tx c2004004e2 to sGx4mWyTKY3V4bNdgcSxKTbZ1iVkKHyLGM')).toBe('tx <hex> to <address>');
-    expect(mask('send: Not enough: you have 0.5 ECX, need 12.5 ECX (1500000 sats); fee 22600')).toBe('send: Not enough: you have <amount> ECX, need <amount> ECX (<amount> sats); fee <n>');
+    expect(mask('send: Not enough: you have 0.5 sECX, need 12.5 sECX (1500000 sats); fee 22600')).toBe('send: Not enough: you have <amount> sECX, need <amount> sECX (<amount> sats); fee <n>');
+    expect(mask('an older desktop: 0.5 ECX')).toBe('an older desktop: <amount> ECX');
     expect(mask('wss://bob:hunter2@relay.example/ws')).toBe('wss://<user>@relay.example/ws');
     // What helps find a problem stays: states, request names, errors, heights.
     expect(mask('link: reconnecting; send: The desktop is busy (block 307)')).toBe('link: reconnecting; send: The desktop is busy (block 307)');

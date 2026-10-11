@@ -36,8 +36,10 @@ if (!existsSync(join(dist, 'index.html'))) {
   process.exit(1);
 }
 
-// The headers fb-relay sends (relay/src/lib.rs, CSP and PERMISSIONS_POLICY): only 'self'.
-const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
+// The headers fb-relay sends (relay/src/lib.rs, CSP and PERMISSIONS_POLICY): only 'self', and FreeBank's helper.
+const ASK_URL = 'https://ask.ecxfreebank.com/ask';
+const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; " +
+  "connect-src 'self' https://ask.ecxfreebank.com; " +
   "manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const PERMISSIONS = 'camera=(self), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), fullscreen=()';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -335,6 +337,7 @@ async function runEngine(name) {
     await page.getByRole('button', { name: 'Scan the code on your desktop' }).waitFor();
     await shot(page, 'not-paired');
     check('not-paired screen', true);
+    check('ask: the ? shows before pairing', (await page.getByTestId('ask-btn').count()) === 1);
 
     // 2. Pairing link.
     const link = desk.pairingLink(wsUrl, origin);
@@ -368,6 +371,33 @@ async function runEngine(name) {
     const rows = await page.getByTestId('txs').locator('li').count();
     check('history shown', rows === 4, `${rows} rows`);
     await shot(page, 'home');
+
+    // 3a. Ask FreeBank (phone page v0.4.6): the header's ?, to the helper's one address (answered here by a stand-in
+    // with the helper's CORS header), as plain text; recovery words never leave the phone.
+    const asked = [];
+    await page.route(ASK_URL, (route) => {
+      const r = route.request();
+      asked.push({ method: r.method(), body: r.postData(), type: r.headers()['content-type'] ?? '' });
+      route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'application/json', 'access-control-allow-origin': origin },
+        body: JSON.stringify({ answer: 'Open the bot and tap Borrow.' }),
+      });
+    });
+    await page.getByTestId('ask-btn').click();
+    await page.getByLabel('Your question').fill('How do I borrow?');
+    await page.getByRole('button', { name: 'Ask', exact: true }).click();
+    await page.getByTestId('ask-answer').getByText('Open the bot and tap Borrow.').waitFor({ timeout: 10000 });
+    check('ask: the helper answers', asked.length === 1 && asked[0].method === 'POST' && asked[0].body === '{"q":"How do I borrow?"}'
+      && asked[0].type.startsWith('text/plain'), JSON.stringify(asked));
+    await shot(page, 'ask-answer');
+    await page.getByLabel('Your question').fill('abandon ability able about above absent absorb abstract absurd abuse access accident');
+    await page.getByRole('button', { name: 'Ask', exact: true }).click();
+    await page.getByTestId('ask-error').getByText(/recovery words/).waitFor({ timeout: 5000 });
+    check('ask: recovery words refused, nothing sent', asked.length === 1);
+    await page.getByRole('button', { name: 'Back' }).click();
+    await page.getByTestId('home').waitFor();
+    await page.unroute(ASK_URL);
     await page.getByTestId('txs').locator('li button.tx').first().click();
     const txid = (await page.getByTestId('txid').first().textContent()).trim();
     check('tx expands with txid', txid === desk.wallet.txs[0].txid);
@@ -426,13 +456,13 @@ async function runEngine(name) {
 
     // 5. Send under the limit.
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await page.getByTestId('limit').getByText('0.10 ECX').waitFor({ timeout: 10000 });
+    await page.getByTestId('limit').getByText('0.10 sECX').waitFor({ timeout: 10000 });
     await page.getByLabel('Pay to address').fill(address);
     await page.getByLabel('Amount').fill('0,05');
     await shot(page, 'send-form');
     await page.getByRole('button', { name: 'Review' }).click();
     await shot(page, 'send-review');
-    await page.getByRole('button', { name: 'Send 0.05 ECX' }).click();
+    await page.getByRole('button', { name: 'Send 0.05 sECX' }).click();
     await page.getByTestId('receipt').waitFor({ timeout: 10000 });
     const r1 = (await page.getByTestId('receipt-txid').textContent()).trim();
     check('send receipt with txid', /^[0-9a-f]{64}$/.test(r1) && r1 === desk.wallet.txs[0].txid);
@@ -442,12 +472,12 @@ async function runEngine(name) {
 
     // 6. Held send (over the remaining 0.05).
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await page.getByTestId('limit').getByText('0.05 ECX').waitFor({ timeout: 10000 });
+    await page.getByTestId('limit').getByText('0.05 sECX').waitFor({ timeout: 10000 });
     await page.getByLabel('Pay to address').fill(address);
     await page.getByLabel('Amount').fill('1');
     await page.getByRole('button', { name: 'Review' }).click();
     await page.getByText("more than today's limit").waitFor();
-    await page.getByRole('button', { name: 'Send 1.00 ECX' }).click();
+    await page.getByRole('button', { name: 'Send 1.00 sECX' }).click();
     await page.getByTestId('held').waitFor({ timeout: 10000 });
     check('held send shows waiting for desktop', await page.getByText('Waiting for your desktop…').isVisible());
     await shot(page, 'send-held');
@@ -463,11 +493,11 @@ async function runEngine(name) {
     // 6b. The desktop wallet is locked: a send within the limit is held too, and the page says why.
     desk.locked = true;
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await page.getByTestId('limit').getByText('0.05 ECX').waitFor({ timeout: 10000 });
+    await page.getByTestId('limit').getByText('0.05 sECX').waitFor({ timeout: 10000 });
     await page.getByLabel('Pay to address').fill(address);
     await page.getByLabel('Amount').fill('0.01');
     await page.getByRole('button', { name: 'Review' }).click();
-    await page.getByRole('button', { name: 'Send 0.01 ECX' }).click();
+    await page.getByRole('button', { name: 'Send 0.01 sECX' }).click();
     await page.getByTestId('held-locked').waitFor({ timeout: 10000 });
     check('locked wallet: the page says so',
       (await page.getByTestId('held-locked').textContent()).trim() === 'Your desktop wallet is locked: confirm on your desktop.');
@@ -498,7 +528,7 @@ async function runEngine(name) {
     await page.getByTestId('note-action').waitFor();
     check('redeem: starts from what can be redeemed', (await page.getByLabel('Amount of notes').inputValue()) === '0.5');
     await page.getByRole('button', { name: 'Review' }).click();
-    await page.getByRole('button', { name: 'Redeem 0.50 ECX' }).click();
+    await page.getByRole('button', { name: 'Redeem 0.50 sECX' }).click();
     await page.getByTestId('note-held').waitFor({ timeout: 10000 });
     await shot(page, 'note-held');
     await page.getByTestId('note-receipt').waitFor({ timeout: 15000 });
@@ -527,7 +557,7 @@ async function runEngine(name) {
     check('approval: declined on the phone', desk.approvals.get(aid)?.answer === 'declined');
     // A card the desktop gave up on (it quit, or "approve-done" was lost) goes by itself, and a desktop clock ten
     // minutes ahead doesn't end it early.
-    desk.askApproval({ what: 'action', amount: 0.05102, address: '', text: `Send 0.05 ECX of house #3's notes to ${address}` }, 3, 600);
+    desk.askApproval({ what: 'action', amount: 0.05102, address: '', text: `Send 0.05 sECX of house #3's notes to ${address}` }, 3, 600);
     await page.getByTestId('approve-ask').getByText('fees included').waitFor({ timeout: 10000 });
     check('approval: a payment other than a send shows what it costs', true);
     await page.getByTestId('approve-ask').getByText('Your desktop stopped waiting').waitFor({ timeout: 10000 });
@@ -557,7 +587,7 @@ async function runEngine(name) {
     // 8. Reload: still paired (key from IndexedDB, fresh handshake).
     await page.reload();
     await page.getByTestId('status').getByText('Connected').waitFor({ timeout: 15000 });
-    // 11.44, plus the 0.50 ECX of notes redeemed in 6c.
+    // 11.44, plus the 0.50 sECX of notes redeemed in 6c.
     await page.getByTestId('balance').getByText('11.94').waitFor({ timeout: 10000 });
     check('reload keeps the pairing', true);
 
@@ -795,7 +825,7 @@ async function runEngine(name) {
         (await owner.getByTestId('pay-to').textContent()).includes('Corner Shop') && (await owner.getByLabel('Amount of notes').inputValue()) === '0.05');
       await shot(owner, 'scan-to-pay');
       await owner.getByRole('button', { name: 'Review' }).click();
-      await owner.getByRole('button', { name: 'Send 0.05 ECX' }).click();
+      await owner.getByRole('button', { name: 'Send 0.05 sECX' }).click();
       await owner.getByTestId('note-receipt').waitFor({ timeout: 15000 });
       check('scan to pay: paid', desk.requests.some((r) => r.m === 'note-send' && r.a.address === member && r.a.house === 5 && r.a.amount === 0.05));
       await shop.getByTestId('shop-paid').waitFor({ timeout: 15000 });

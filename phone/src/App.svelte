@@ -4,7 +4,7 @@
   import { RelayLink } from './lib/relay';
   import { loadMoving, loadPairing, forgetPairing, isHosted, type Pairing } from './lib/store';
   import { noteFlow, sendFlow } from './lib/sendflow';
-  import { takePairFragment, takePayFragment } from './lib/fragment';
+  import { takePairFragment, takePayFragment, takeTokenFragment } from './lib/fragment';
   import Pair from './components/Pair.svelte';
   import Home from './components/Home.svelte';
   import Receive from './components/Receive.svelte';
@@ -27,10 +27,17 @@
   export let pairValue: string | null = null;
   /** A payment link the page was opened with (`#pay=`, desktop v0.2.8), already taken from the address bar. */
   export let payValue: string | null = null;
+  /** A token link the page was opened with (`#token=`), already taken from the address bar. */
+  export let tokenValue: string | null = null;
+  // The token wallet's mint, set when the page is built; its code loads only when Tokens opens.
+  const mintUrl: string = import.meta.env.VITE_FB_MINT ?? '';
+  const loadTokens = () => import('./components/Tokens.svelte');
+  // Ask FreeBank (phone page v0.4.6), the header's ?: its code and the recovery-word list load only when it opens.
+  const loadAsk = () => import('./components/Ask.svelte');
 
   type Screen =
     | 'loading' | 'pair' | 'home' | 'receive' | 'send' | 'settings' | 'notes' | 'houses' | 'note'
-    | 'invite' | 'scanpay' | 'shop' | 'move';
+    | 'invite' | 'scanpay' | 'shop' | 'move' | 'tokens';
   let screen: Screen = 'loading';
   let pairing: Pairing | null = null;
   let client: PhoneClient | null = null;
@@ -48,6 +55,8 @@
   let noteAct: { holding: NoteHolding; kind: PaymentKind } | null = null;
   // "Report a problem or suggest something", from the footer on any screen.
   let reporting = false;
+  // "Ask FreeBank", from the header's ? on any screen.
+  let asking = false;
   // Desktop v0.2.8: phones asking to join at a house from this phone's invite (an owner's phone).
   let allows: AllowAsk[] = [];
   let unsubAllows: (() => void) | null = null;
@@ -95,7 +104,10 @@
       loadError = 'This browser will not let the page store its key (private browsing?). ' + (e as Error).message;
     }
     if (pairValue) screen = 'pair';
-    else if (pairing) {
+    else if (tokenValue) {
+      if (pairing) startClient(pairing);
+      screen = 'tokens';
+    } else if (pairing) {
       startClient(pairing);
       screen = 'home';
       if (payValue) openPay(payValue);
@@ -118,7 +130,10 @@
     screen = s;
   }
   function onPop(e: PopStateEvent) {
-    if (!pairing) return;
+    if (!pairing) {
+      screen = e.state?.screen === 'tokens' ? 'tokens' : 'pair';
+      return;
+    }
     screen = (e.state?.screen as Screen) ?? 'home';
     // A note action's screen needs its house; without it (a reload), back to Notes.
     if (screen === 'note' && !noteAct) screen = 'notes';
@@ -128,6 +143,12 @@
 
   // A pairing link opened while the page is already open (same document, only the hash changes).
   function onHash() {
+    const token = takeTokenFragment();
+    if (token) {
+      tokenValue = token;
+      openTokens();
+      return;
+    }
     const pay = takePayFragment();
     if (pay) {
       if (pairing) openPay(pay);
@@ -138,6 +159,19 @@
     if (!v) return;
     pairValue = v;
     screen = 'pair';
+  }
+
+  function openTokens() {
+    if (screen === 'tokens') return;
+    if (history.state?.screen) history.replaceState({ screen: 'tokens' }, '');
+    else history.pushState({ screen: 'tokens' }, '');
+    screen = 'tokens';
+  }
+
+  function closeTokens() {
+    tokenValue = null;
+    if (history.state?.screen === 'tokens') history.back();
+    else screen = pairing ? 'home' : 'pair';
   }
 
   // A payment link (desktop v0.2.8): straight to Scan to pay, which reads it.
@@ -203,13 +237,18 @@
 
 <header>
   <h1><span class="mark" aria-hidden="true">☉</span>FreeBank</h1>
-  {#if pairing && screen !== 'pair'}
+  {#if screen !== 'loading'}
     <div class="right">
-      <span class="status {status}" data-testid="status" role="status">
-        <span class="dot" aria-hidden="true"></span>{statusText[status]}
-      </span>
-      {#if screen !== 'settings'}
-        <button class="plain gear" aria-label="Settings" on:click={() => go('settings')}>⚙</button>
+      {#if pairing && screen !== 'pair'}
+        <span class="status {status}" data-testid="status" role="status">
+          <span class="dot" aria-hidden="true"></span>{statusText[status]}
+        </span>
+      {/if}
+      {#if !asking}
+        <button class="plain gear ask" aria-label="Ask FreeBank" data-testid="ask-btn" on:click={() => { reporting = false; asking = true; }}>?</button>
+      {/if}
+      {#if pairing && screen !== 'pair' && screen !== 'settings'}
+        <button class="plain gear" aria-label="Settings" on:click={() => { asking = false; reporting = false; go('settings'); }}>⚙</button>
       {/if}
     </div>
   {/if}
@@ -221,6 +260,14 @@
 
 {#if reporting}
   <Report on:back={() => (reporting = false)} />
+{:else if asking}
+  {#await loadAsk()}
+    <p class="muted center"><span class="spinner"></span></p>
+  {:then m}
+    <svelte:component this={m.default} on:back={() => (asking = false)} />
+  {:catch e}
+    <p class="card error small">Ask FreeBank didn't load: {e.message}</p>
+  {/await}
 {:else if screen === 'loading'}
   <p class="muted center"><span class="spinner"></span></p>
 {:else if screen === 'pair'}
@@ -228,6 +275,17 @@
   {#key pairValue}
     <Pair {pairValue} alreadyPaired={!!pairing} on:paired={onPaired} />
   {/key}
+  {#if mintUrl && !pairValue}
+    <button class="full tokens-entry" data-testid="open-tokens" on:click={openTokens}>Tokens on this phone, no desktop needed</button>
+  {/if}
+{:else if screen === 'tokens'}
+  {#await loadTokens()}
+    <p class="muted center"><span class="spinner"></span></p>
+  {:then m}
+    <svelte:component this={m.default} {mintUrl} incoming={tokenValue} on:back={closeTokens} on:taken={() => (tokenValue = null)} />
+  {:catch e}
+    <p class="card error small">The token wallet didn't load: {e.message}</p>
+  {/await}
 {:else if status === 'denied' && screen !== 'settings'}
   <section class="card stack">
     <h2>This phone was removed</h2>
@@ -248,6 +306,7 @@
   {:else if screen === 'home'}
     <Home {client} {status} on:receive={() => go('receive')} on:send={() => go('send')} on:notes={() => go('notes')}
       on:scanpay={() => { payValue = null; go('scanpay'); }} on:invite={() => go('invite')} />
+    {#if mintUrl}<button class="full tokens-entry" data-testid="open-tokens" on:click={openTokens}>Tokens</button>{/if}
     <HomeScreenHint paired />
   {:else if screen === 'receive'}
     <Receive {client} {status} on:back={() => go('home')}
@@ -285,7 +344,7 @@
   {/key}
 {/if}
 
-{#if !reporting && screen !== 'loading'}
+{#if !reporting && !asking && screen !== 'loading'}
   <footer>
     <button class="plain small muted" on:click={() => (reporting = true)}>Report a problem or suggest something</button>
   </footer>
@@ -343,5 +402,9 @@
     min-width: 48px;
     color: var(--muted);
   }
+  .ask {
+    font-weight: 700;
+  }
   .center { text-align: center; padding: 40px 0; }
+  .tokens-entry { margin-top: 12px; }
 </style>

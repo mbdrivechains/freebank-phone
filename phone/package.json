@@ -1,7 +1,7 @@
 {
   "name": "freebank-phone",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.4.6",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -10,9 +10,12 @@
     "test": "vitest run",
     "vectors": "node scripts/make-vectors.mjs",
     "e2e:setup": "bash e2e/setup-browsers.sh",
-    "e2e": "npm run build && node e2e/smoke.mjs"
+    "e2e": "npm run build && node e2e/smoke.mjs",
+    "e2e:tokens": "VITE_FB_MINT=http://127.0.0.1:47339 vite build && node e2e/tokens.mjs"
   },
   "dependencies": {
+    "@cashu/cashu-ts": "4.11.0",
+    "@scure/bip39": "2.4.0",
     "jsqr": "1.4.0"
   },
   "devDependencies": {

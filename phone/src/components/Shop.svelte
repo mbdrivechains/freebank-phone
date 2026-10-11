@@ -1,6 +1,6 @@
 <script lang="ts">
   // The Shop screen (desktop v0.2.8): type the amount, show the payment QR code, and see "Paid ✓" when the house's
-  // notes (or ECX) arrive. The payer scans it with FreeBank's Scan to pay. The day's takings stay on this phone only.
+  // notes (or sECX) arrive. The payer scans it with FreeBank's Scan to pay. The day's takings stay on this phone only.
   import { createEventDispatcher, onDestroy } from 'svelte';
   import type { PhoneClient, Status } from '../lib/api';
   import { addTaking, heldValue, isPaid, loadTakings, type Taking } from '../lib/hosted';
@@ -145,7 +145,7 @@
   {#if state === 'amount'}
     <div class="card stack">
       <div class="muted small">Take a payment in {houseName}'s notes</div>
-      <div class="entry" data-testid="shop-amount">{text || '0'} <span class="unit">ECX</span></div>
+      <div class="entry" data-testid="shop-amount">{text || '0'} <span class="unit">sECX</span></div>
       <div class="keys">
         {#each KEYS as k}<button type="button" on:click={() => key(k)} aria-label={k === '⌫' ? 'Delete' : k}>{k}</button>{/each}
       </div>
@@ -154,7 +154,7 @@
     <button class="full" on:click={counter}>Counter QR code (the payer types the amount)</button>
   {:else if state === 'qr'}
     <div class="card stack qrcard">
-      <div class="big" data-testid="shop-asked">{fmtEcx(asked)} <span class="unit">ECX</span></div>
+      <div class="big" data-testid="shop-asked">{fmtEcx(asked)} <span class="unit">sECX</span></div>
       <Qr text={link} label="Payment QR code" />
       <p class="small">The payer scans this with <strong>Scan to pay</strong> in FreeBank.</p>
       <p class="muted small"><span class="spinner"></span> Waiting for the payment… it shows here once the house's desktop sees it.</p>
@@ -164,7 +164,7 @@
   {:else if state === 'paid'}
     <div class="card stack paidcard" data-testid="shop-paid">
       <div class="tick">✓</div>
-      <div class="big">Paid {fmtEcx(asked)} <span class="unit">ECX</span></div>
+      <div class="big">Paid {fmtEcx(asked)} <span class="unit">sECX</span></div>
       <div class="muted small">in {houseName}'s notes</div>
     </div>
     <button class="primary full" on:click={next}>Next customer</button>
@@ -182,9 +182,9 @@
 
   {#if takings.length}
     <div class="card">
-      <div class="muted small">Today: {fmtEcx(today)} ECX, {takings.length} payment{takings.length === 1 ? '' : 's'}</div>
+      <div class="muted small">Today: {fmtEcx(today)} sECX, {takings.length} payment{takings.length === 1 ? '' : 's'}</div>
       <ul class="takings" data-testid="takings">
-        {#each takings as t}<li><span class="muted small">{fmtTime(Math.floor(t.at / 1000))}</span><span>{fmtEcx(t.amount)} ECX</span></li>{/each}
+        {#each takings as t}<li><span class="muted small">{fmtTime(Math.floor(t.at / 1000))}</span><span>{fmtEcx(t.amount)} sECX</span></li>{/each}
       </ul>
     </div>
   {/if}

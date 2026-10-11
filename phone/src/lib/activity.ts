@@ -21,7 +21,7 @@ export function mask(s: string): string {
       /::|(?:.*:){3}/.test(ip) && /[0-9a-fA-F]/.test(ip) ? `${pre}<ip>` : m)
     .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '<ip>')
     .replace(/\b(?=[0-9a-fA-F]*\d)(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{8,}\b/g, '<hex>')
-    .replace(/\b\d+(?:\.\d+)?(?=\s*(?:ECX|BTC|sats?|satoshis?|units?|coins?)\b)/gi, '<amount>')
+    .replace(/\b\d+(?:\.\d+)?(?=\s*(?:s?ECX|BTC|sats?|satoshis?|units?|coins?)\b)/gi, '<amount>')
     .replace(/\b\d{4,}(?:\.\d+)?\b/g, '<n>')
     .replace(/[A-Za-z0-9_+/=-]{40,}/g, '<id>');
 }

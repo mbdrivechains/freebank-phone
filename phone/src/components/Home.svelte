@@ -115,12 +115,12 @@
 <section class="stack" data-testid="home">
   {#if $sendFlow.k === 'held' || $sendFlow.k === 'sending'}
     <button class="banner full" on:click={() => dispatch('send')}>
-      <span class="spinner"></span> A payment of {fmtEcx($sendFlow.amount)} ECX is waiting for your desktop{$sendFlow.k === 'held' && $sendFlow.why === 'locked' ? ' (its wallet is locked)' : ''}
+      <span class="spinner"></span> A payment of {fmtEcx($sendFlow.amount)} sECX is waiting for your desktop{$sendFlow.k === 'held' && $sendFlow.why === 'locked' ? ' (its wallet is locked)' : ''}
     </button>
   {/if}
   {#if $noteFlow.k === 'held' || $noteFlow.k === 'sending'}
     <button class="banner full" on:click={() => dispatch('notes')}>
-      <span class="spinner"></span> {fmtEcx($noteFlow.amount)} ECX of notes are waiting for your desktop
+      <span class="spinner"></span> {fmtEcx($noteFlow.amount)} sECX of notes are waiting for your desktop
     </button>
   {/if}
 
@@ -128,13 +128,13 @@
     <div class="label">Balance</div>
     <div class="amount" data-testid="balance">
       {#if balance}
-        {fmtEcx(balance.confirmed)} <span class="unit">ECX</span>
+        {fmtEcx(balance.confirmed)} <span class="unit">sECX</span>
       {:else}
         <span class="muted">—</span>
       {/if}
     </div>
     {#if balance && balance.pending !== 0}
-      <div class="pending" data-testid="pending">{balance.pending > 0 ? '+' : ''}{fmtEcx(balance.pending)} ECX pending</div>
+      <div class="pending" data-testid="pending">{balance.pending > 0 ? '+' : ''}{fmtEcx(balance.pending)} sECX pending</div>
     {/if}
     {#if node}
       <div class="muted small meta">Block {node.blocks.toLocaleString()}{node.synced ? '' : ' · desktop still syncing'}</div>

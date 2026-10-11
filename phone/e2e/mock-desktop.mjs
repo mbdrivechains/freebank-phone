@@ -371,7 +371,7 @@ export class MockDesktop {
     return n;
   }
 
-  /** Pay `h` ({kind, house, amount, address}): ECX out, or a house's notes sent, redeemed or demanded. */
+  /** Pay `h` ({kind, house, amount, address}): sECX out, or a house's notes sent, redeemed or demanded. */
   pay(h) {
     const w = this.wallet;
     const txid = hex(rand(32));

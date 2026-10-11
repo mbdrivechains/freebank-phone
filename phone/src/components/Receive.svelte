@@ -57,7 +57,7 @@
       <p class="addr mono" data-testid="address">{address}</p>
       <Copy text={address} label="Copy address" />
     </div>
-    <p class="muted small">Send only ECX to this address. Payments show on Home once your desktop sees them.</p>
+    <p class="muted small">Send only sECX to this address. Payments show on Home once your desktop sees them.</p>
     {#each members as m (m.house)}
       <div class="card stack qrcard" data-testid="member-address">
         <div class="label">Your address at {m.name ?? `house #${m.house}`}</div>

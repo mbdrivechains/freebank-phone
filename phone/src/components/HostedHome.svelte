@@ -124,8 +124,8 @@
     {/if}
     <div class="card balance">
       <div class="label">At {houseName}</div>
-      <div class="amount" data-testid="hosted-balance">{fmtEcx(houseNotes)} <span class="unit">ECX</span></div>
-      <div class="muted small">in {houseName}'s notes{balance && balance.confirmed + balance.pending > 0 ? `, and ${fmtEcx(balance.confirmed + balance.pending)} ECX` : ''}</div>
+      <div class="amount" data-testid="hosted-balance">{fmtEcx(houseNotes)} <span class="unit">sECX</span></div>
+      <div class="muted small">in {houseName}'s notes{balance && balance.confirmed + balance.pending > 0 ? `, and ${fmtEcx(balance.confirmed + balance.pending)} sECX` : ''}</div>
       {#if st.blocks}<div class="muted small meta">Block {st.blocks.toLocaleString()}</div>{/if}
     </div>
     <button class="primary full shop" data-testid="open-shop" on:click={() => dispatch('shop')}>Shop: take a payment</button>
@@ -136,7 +136,7 @@
     {#if otherNotes.length || (balance && balance.confirmed > 0)}
       <div class="actions">
         {#if otherNotes.length}<button on:click={() => dispatch('notes')}>Other notes</button>{/if}
-        {#if balance && balance.confirmed > 0}<button on:click={() => dispatch('send')}>Send ECX</button>{/if}
+        {#if balance && balance.confirmed > 0}<button on:click={() => dispatch('send')}>Send sECX</button>{/if}
       </div>
     {/if}
     {#if txs && txs.length}

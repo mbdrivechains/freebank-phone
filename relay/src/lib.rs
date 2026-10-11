@@ -67,8 +67,10 @@ pub mod close {
 }
 
 /// The Content-Security-Policy on every response. The page needs nothing but its own scripts, styles, icon and
-/// same-origin WebSocket (`phone/README.md`, CSP note); no inline code, no `data:` URLs, no third parties.
-pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; \
+/// same-origin WebSocket (`phone/README.md`, CSP note), plus FreeBank's helper for Ask FreeBank (phone page v0.4.6,
+/// `phone/src/lib/ask.ts`: one fixed https address, ours); no inline code, no `data:` URLs, no third parties.
+pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
+                       connect-src 'self' https://ask.ecxfreebank.com; \
                        manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// Browser features the page never uses, and the camera for itself alone: "Scan the code on your desktop" reads the

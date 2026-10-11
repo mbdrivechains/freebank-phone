@@ -43,7 +43,7 @@ describe('checking the recovery words', () => {
 describe('the Shop screen sees a payment', () => {
   const note = (house: number, amount: number) => ({ house, amount } as NoteHolding);
 
-  it("counts only the house's notes: not other houses, not ECX (security review of v0.2.8, L6)", () => {
+  it("counts only the house's notes: not other houses, not sECX (security review of v0.2.8, L6)", () => {
     expect(heldValue([note(5, 0.1), note(3, 9)], 5)).toBe(0.1);
     expect(heldValue([note(5, 0.1), note(5, 0.02)], 5)).toBe(0.12);
     expect(heldValue(null, 5)).toBe(0);

@@ -50,7 +50,7 @@
 
 <section class="stack" data-testid="notes">
   <div class="head">
-    <p class="muted small">Notes are claims on a house, paid in ECX, one for one.</p>
+    <p class="muted small">Notes are claims on a house, paid in sECX, one for one.</p>
     <button class="plain refresh" on:click={load} disabled={loading || status !== 'connected'} aria-label="Refresh">
       {#if loading}<span class="spinner"></span>{:else}↻{/if}
     </button>
@@ -73,10 +73,10 @@
             {#if typeLabel(n.type)}<span class="badge members" data-testid="note-type">{typeLabel(n.type)}</span>{/if}
           </div>
         </div>
-        <div class="big">{fmtEcx(n.amount)} <span class="unit">ECX</span></div>
+        <div class="big">{fmtEcx(n.amount)} <span class="unit">sECX</span></div>
         {#if n.demanded > 0}
           <p class="small muted">
-            {fmtEcx(n.demanded)} ECX under demand{n.state === 'd' ? `, in the payout queue${n.rate_bps ? ` at ${n.rate_bps / 100}% a year` : ''}` : ''}.
+            {fmtEcx(n.demanded)} sECX under demand{n.state === 'd' ? `, in the payout queue${n.rate_bps ? ` at ${n.rate_bps / 100}% a year` : ''}` : ''}.
           </p>
         {/if}
         <div class="acts">

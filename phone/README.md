@@ -20,7 +20,17 @@ npm run e2e            # build, then smoke test in WebKit (390x844), Chromium (P
 node e2e/smoke.mjs --real-relay   # same flow through ../relay/target/debug/fb-relay (mock desktop as host)
 node e2e/smoke.mjs --real-relay --relay-bin=../relay/target/release/fb-relay   # another build
 node e2e/smoke.mjs --relay-url=https://127.0.0.1:18443   # a relay already running there (it must allow that origin)
+npm run e2e:tokens     # the token wallet in all three engines against fb-mint's dev build (../mint: cargo build
+                       # --example dev-mint); builds the page for it (VITE_FB_MINT), so run npm run build after
+FB_DEV_MINT=http://127.0.0.1:47339 FB_DEV_CONTROL=http://127.0.0.1:47340 npx vitest run src/lib/tokens.mint.test.ts
+                       # the wallet's code alone against a dev mint already running
 ```
+
+**Tokens** (v0.4.0, `gateway/docs/distribution/MINT_DESIGN.md` §5) are on only when the page is built with
+`VITE_FB_MINT=https://<the mint>`; the relay's CSP must then allow that origin in `connect-src`. Without it (the
+default build) the Tokens buttons don't show. The wallet's code (cashu-ts 4.11.0 and the noble/scure libraries, MIT)
+is its own file, loaded only when Tokens opens. It works without a desktop: a token link (`#token=`) opens it on any
+phone.
 
 | Path | What |
 |---|---|
@@ -33,6 +43,9 @@ node e2e/smoke.mjs --relay-url=https://127.0.0.1:18443   # a relay already runni
 | `scripts/kk-ref.mjs` | a second, independent implementation of the crypto (both sides) in plain JS |
 | `scripts/make-vectors.mjs` | writes the interop vectors for the Rust desktop (and the relay's proof) |
 | `e2e/mock-desktop.mjs` | fake desktop (pairing with the comparison code, the host proof, handshake, narrow door, held sends) on `kk-ref.mjs` |
+| `src/lib/tokens.ts`, `tokenstore.ts` | The token wallet: twelve words (NUT-13), receive (swapped at once, DLEQ required), send as a link, take back, notes in (a mint quote's address), notes out, restore; its own IndexedDB database |
+| `src/components/Tokens.svelte` | Its screens |
+| `e2e/tokens.mjs` | Two phones against fb-mint's dev build: set-up with the words checked, notes in, a link sent and taken in, the claimed link not taken back, notes out |
 | `e2e/smoke.mjs` | static server + mock relay on 127.0.0.1 with a `'self'`-only CSP; screenshots in `e2e/shots/<engine>/` |
 
 ## Spec notes (readings I picked where PROTOCOL.md is open)
@@ -67,8 +80,9 @@ node e2e/smoke.mjs --relay-url=https://127.0.0.1:18443   # a relay already runni
    http), so a crafted QR code can't point the page at another server. A link opened while the page is already
    open (hash change) also pairs. Re-pairing replaces the stored pairing.
 10. **CSP:** the page needs no inline script or style and no `data:` URLs; it runs under fb-relay's
-    `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; ...` in all three
-    engines (`connect-src 'self'` covers same-host `ws:`/`wss:`). The smoke test's own server sends the same
+    `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'
+    https://ask.ecxfreebank.com; ...` in all three engines (`connect-src 'self'` covers same-host `ws:`/`wss:`; the one
+    other origin is FreeBank's helper, for Ask FreeBank, the header's ?, from phone page v0.4.6). The smoke test's own server sends the same
     headers.
 11. **The comparison code** (PROTOCOL.md; security review P1): as soon as the pair request is out, the waiting
     screen says "Check that your desktop shows 042 917" and keeps it until the phone is paired or refused. It is

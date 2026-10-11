@@ -63,7 +63,7 @@
     const a = address.trim();
     formError = '';
     if (!/^[A-Za-z0-9]{20,100}$/.test(a)) formError = 'Enter the address you are paying (it starts with X).';
-    else if (amount === null) formError = 'Enter an amount in ECX, like 0.05 (up to 8 decimals).';
+    else if (amount === null) formError = 'Enter an amount in sECX, like 0.05 (up to 8 decimals).';
     if (formError) return;
     address = a;
     reviewing = true;
@@ -126,12 +126,12 @@
         <label for="amt">Amount</label>
         <div class="amtwrap">
           <input id="amt" bind:value={amountText} inputmode="decimal" placeholder="0.00" autocomplete="off" enterkeyhint="done" />
-          <span class="unit">ECX</span>
+          <span class="unit">sECX</span>
         </div>
       </div>
       <p class="muted small" data-testid="limit">
         {#if limitLeft !== null}
-          You can send up to <strong>{fmtEcx(limitLeft)} ECX</strong> more today from this phone. Larger payments wait for you to approve them on your desktop.
+          You can send up to <strong>{fmtEcx(limitLeft)} sECX</strong> more today from this phone. Larger payments wait for you to approve them on your desktop.
         {:else}
           Payments over this phone's daily limit wait for you to approve them on your desktop.
         {/if}
@@ -141,14 +141,14 @@
     </form>
   {:else if $sendFlow.k === 'form' && reviewing}
     <div class="card stack">
-      <div class="big">{fmtEcx(amount ?? 0)} <span class="unit">ECX</span></div>
+      <div class="big">{fmtEcx(amount ?? 0)} <span class="unit">sECX</span></div>
       <div><div class="muted small">To</div><div class="mono wrap">{address}</div></div>
       {#if overLimit}
         <p class="small warnbox">This is more than today's limit, so it waits for you to confirm it on your desktop.</p>
       {/if}
     </div>
     <button class="primary full" on:click={send} disabled={status !== 'connected' || checkingFaceId || (faceIdSends && !sendCh)}
-      >{faceIdSends ? 'Send with Face ID' : `Send ${fmtEcx(amount ?? 0)} ECX`}</button
+      >{faceIdSends ? 'Send with Face ID' : `Send ${fmtEcx(amount ?? 0)} sECX`}</button
     >
     {#if authError}<p class="error small">{authError}</p>{/if}
     <button class="full" on:click={() => (reviewing = false)}>Change</button>
@@ -161,13 +161,13 @@
       {#if $sendFlow.why === 'locked'}
         <p class="lockedbox" data-testid="held-locked">Your desktop wallet is locked: confirm on your desktop.</p>
       {/if}
-      <p>Open FreeBank on your desktop and approve sending <strong>{fmtEcx($sendFlow.amount)} ECX</strong>.</p>
+      <p>Open FreeBank on your desktop and approve sending <strong>{fmtEcx($sendFlow.amount)} sECX</strong>.</p>
       <p class="muted small">You can leave this screen; the answer shows up here.</p>
     </div>
   {:else if $sendFlow.k === 'done'}
     <div class="card stack" data-testid="receipt">
       <div class="ok">✓ Sent</div>
-      <div class="big">{fmtEcx($sendFlow.amount)} <span class="unit">ECX</span></div>
+      <div class="big">{fmtEcx($sendFlow.amount)} <span class="unit">sECX</span></div>
       <div><div class="muted small">To</div><div class="mono wrap">{$sendFlow.address}</div></div>
       <div>
         <div class="muted small">Transaction ID</div>
