@@ -75,6 +75,7 @@
   }
   .a {
     white-space: pre-wrap;
+    overflow-wrap: anywhere; /* a long link breaks instead of running past the card */
     line-height: 1.5;
     margin: 0;
   }
