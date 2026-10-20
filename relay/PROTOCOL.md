@@ -544,6 +544,57 @@ paid in that house's notes; the desktop's Receive does the same.
 fragment as it does `#pair=`. On iPhone the Camera opens such a link in Safari, not in the Home Screen icon, so payers
 scan from inside the page.
 
+## Over Nostr (desktop v0.6.0)
+
+The same protocol, carried by public Nostr relays instead of fb-relay, so nobody hosts the link. Everything above the pipe is as above: pairing and its comparison
+code, the session, the narrow door, held sends, Face ID, approvals, hosted wallets, wake on demand. Both links run side
+by side: a phone keeps the one it paired over.
+
+- **Keys:** the desktop's Nostr key `nD` (secp256k1, random, `phone/nostr.key`), and the phone's `nP` (random, kept with
+  its pairing). They only sign events; `P`, `D` and the session prove who is talking.
+- **Pairing link v2:** `https://<phone page>/#pair=<b64u JSON {"v":2, "r":["wss://…",…], "n":"<nD hex>", "d":"<D_pub>",
+  "c":"<C>", "x":<expiry, unix seconds>}>`. At most 5 relays, `wss://` (`ws://` only on 127.0.0.1 or localhost). The
+  page refuses a link expired more than 2 minutes ago, or one whose expiry is more than 12 minutes ahead. Invites add `"h"` as in v1. A v2 link
+  isn't checked against the page's host, as v1's relay is.
+- **The pair request's plaintext adds `"np"`,** the phone's Nostr key. It must equal the key that signed the event, or
+  the request is refused. Allowed, the desktop keeps it with the phone (`np` in `devices.json` or `hosted.json`).
+- **`pair-seen`:** over Nostr, the desktop answers a pair request that opened (one now waiting for "Allow this phone?")
+  with `{"t":"pair-seen"}` in clear. Nothing else tells the phone the desktop is there.
+- **A phone's sessions come over the link it paired on:** over Nostr only from its own `nP`, and a phone paired over
+  the relay never over Nostr (`hello` is `denied` otherwise).
+- **Events:** NIP-01, kind 21913 (ephemeral; the Truthcoin app's link uses it too), tags `p` (the receiver) and
+  `expiration` (+300 s). Each goes to every relay; receivers check the id and signature and drop duplicates. The desktop
+  drops events more than 300 s from its clock, and, before any signature check, events from keys that aren't a paired
+  phone's, unless a pairing code or invite over Nostr is live.
+- **Who gets a channel:** a paired phone's key, up to 8 channels (a ninth takes its least active one's place), 64 in
+  all. Any other key only for a pair request that opens with a live pairing code or invite and names that key, two per
+  key and eight in all; it gets no answer otherwise. A channel starts at `s` 0 in an event made since the desktop's
+  relays connected, and a channel forgotten in the last 10 minutes isn't opened again. A phone revoked or removed is
+  still heard for an hour, so its next `hello` hears `denied`.
+- **One process:** only the app or its background part answers over Nostr, whichever holds `phone/nostr.lock`.
+- **Channels:** the content is `{"v":1, "c":"<16 random bytes, hex>", "s":<seq>, "d":<v1 frame>}`. The phone picks a
+  channel for each connection (one per RelayLink of before) and starts it at `s` 0; each direction counts from 0.
+  Early frames wait 10 s for the ones before them, and a gap that doesn't fill ends the channel. A frame whose JSON is
+  over 24,000 bytes goes in parts, `{…,"p":[i,n],"x":"<text>"}` (2 to 16 parts, consecutive `s`). `{…,"bye":true}`
+  ends a channel; the page sends it whenever a channel ends but by the desktop, and on `pagehide`. The desktop forgets a
+  channel idle for 10 minutes.
+- **Offline:** no frame within 8 s of the phone's first on a channel reads as the relay's `offline`.
+- **Padding:** session plaintexts are padded with spaces (JSON ignores them) to 1, 4 or 16 KiB, both ways and over both
+  links; the desktop pads its longer messages over Nostr to a multiple of 16 KiB, never over the relay (its 64 KiB
+  frames).
+- **What others see:** anyone can subscribe to kind 21913 on a public relay, not only its operator. They see the
+  events' keys, when they are sent and their sizes, and the frames sent in clear: `pair` (sealed inside), `pair-seen`,
+  `paired`, `pair-refused`, `hello` (with `P` and `eP`), `hello-ok`, `denied`, and `bye`. The relay operators also see IP
+  addresses.
+- **Relays:** by default `wss://relay.damus.io`, `wss://nos.lol` and `wss://relay.primal.net`, editable on the desktop
+  (five at most). `status` carries `"relays"` for a phone paired over Nostr, and the page follows a changed list; the
+  desktop keeps listening on the old list for a week after a change.
+- **Face ID:** for a phone paired over Nostr, the origin and relying party come from the desktop's phone page address
+  (`https://app.ecxfreebank.com` by default), not the relay's.
+- **The page's CSP** allows `connect-src wss:` (fb-relay sends it), since the desktop's relay list is editable. That
+  gives up the CSP's block on sending data to other servers, should script ever be injected; `script-src 'self'`
+  still stands. An allowlist is for when the page's CSP moves into a `<meta>` tag.
+
 ## Not in protocol v1
 
 - volunteer relays, peering, WebRTC;

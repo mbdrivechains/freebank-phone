@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { PhoneClient, type AllowAsk, type ApprovalAsk, type NoteHolding, type PaymentKind, type Status } from './lib/api';
-  import { RelayLink } from './lib/relay';
-  import { loadMoving, loadPairing, forgetPairing, isHosted, type Pairing } from './lib/store';
+  import { connectFor, followRelays } from './lib/carrier';
+  import { loadMoving, loadPairing, forgetPairing, isHosted, savePairing, type Pairing } from './lib/store';
   import { noteFlow, sendFlow } from './lib/sendflow';
   import { takePairFragment, takePayFragment, takeTokenFragment } from './lib/fragment';
   import Pair from './components/Pair.svelte';
@@ -70,7 +70,13 @@
   function startClient(p: Pairing) {
     stopClient();
     pairing = p;
-    client = new PhoneClient({ pPriv: p.pPriv, pPub: p.pPub, d: p.d }, () => RelayLink.open(p.relay, p.room));
+    client = new PhoneClient({ pPriv: p.pPriv, pPub: p.pPub, d: p.d }, connectFor(p), {
+      // Over Nostr the desktop's status names its relays: the pairing follows a changed list (desktop v0.6.0).
+      onStatus: (st) => {
+        const changed = followRelays(p, st.relays);
+        if (changed) void savePairing(changed).catch(() => {});
+      },
+    });
     unsub = client.status.subscribe((s) => (status = s));
     unsubLocked = client.locked.subscribe((l) => {
       if (locked && !l) unlocks++;
@@ -234,7 +240,7 @@
   };
 </script>
 
-<svelte:window on:popstate={onPop} on:hashchange={onHash} on:online={() => client?.kick()} />
+<svelte:window on:popstate={onPop} on:hashchange={onHash} on:online={() => client?.kick()} on:pagehide={() => client?.drop()} on:pageshow={(e) => { if (e.persisted) client?.kick(); }} />
 <svelte:document on:visibilitychange={onVisible} />
 
 <header>

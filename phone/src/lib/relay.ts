@@ -3,7 +3,7 @@
 
 export class OfflineError extends Error {
   constructor() {
-    super('Your desktop is not connected to the relay.');
+    super("Your desktop isn't answering. Is FreeBank open on it?");
   }
 }
 

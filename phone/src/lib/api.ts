@@ -40,6 +40,8 @@ export interface NodeStatus {
   step?: string;
   /** step "failed": why */
   why?: string;
+  /** Over Nostr (desktop v0.6.0): the desktop's relays now. */
+  relays?: string[];
 }
 
 /** A members-only or redeem-only house this desktop's wallet runs (desktop v0.2.8, `houses-mine`). */
@@ -193,6 +195,8 @@ export interface ClientOptions {
   requestTimeoutMs?: number;
   readyTimeoutMs?: number; // how long call() waits for a session before failing
   heldTimeoutMs?: number; // how long a held send may wait for its final reply
+  /** Each `status` reply (desktop v0.6.0: over Nostr it carries the relays, which the pairing follows). */
+  onStatus?: (st: NodeStatus) => void;
 }
 
 interface Held {
@@ -266,6 +270,7 @@ export class PhoneClient {
       requestTimeoutMs: 30_000,
       readyTimeoutMs: 12_000,
       heldTimeoutMs: HELD_TIMEOUT_MS,
+      onStatus: () => {},
       ...opts,
     };
   }
@@ -302,6 +307,12 @@ export class PhoneClient {
       p.reject(new LostError('Stopped.'));
       this.pending.delete(id);
     }
+  }
+
+  /** The page is going away (or into the back-forward cache): end the connection now, saying bye over Nostr, so the
+   * desktop doesn't keep it (desktop v0.6.0, review M2). The loop connects again when the page comes back. */
+  drop() {
+    this.transport?.close();
   }
 
   /** Reconnect now if we are waiting to (page became visible, network came back). */
@@ -401,8 +412,9 @@ export class PhoneClient {
     };
     t.send({ t: 'hello', p: this.id.pPub, e: b64u(ePub) });
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const closed = ended.then(() => {
-      throw new Error('closed during handshake');
+    // Over Nostr no relay says the desktop is away: no answer to `hello` reads as the relay's "offline" (v0.6.0).
+    const closed = ended.then((why) => {
+      throw why === 'offline' ? new OfflineError() : new Error('closed during handshake');
     });
     closed.catch(() => {});
     const msg = await Promise.race([
@@ -546,7 +558,10 @@ export class PhoneClient {
     const held = onHeld && ((c: string, why: HeldWhy) => (note(`${method}: held (${why})`), onHeld(c, why)));
     const r = this.callRaw<T>(method, a, held);
     r.then(
-      () => note(`${method}: ok`),
+      (v) => {
+        note(`${method}: ok`);
+        if (method === 'status') this.o.onStatus(v as NodeStatus);
+      },
       (e) => note(`${method}: ${(e as Error)?.message ?? e}`),
     );
     return r;
@@ -570,7 +585,7 @@ export class PhoneClient {
       }, this.o.requestTimeoutMs);
       this.pending.set(id, p);
       // seal() resolves in counter order, so these sends go out in counter order.
-      s.seal({ id, m: method, a }).then(
+      s.seal({ id, m: method, a }, true).then(
         (ct) => t.send({ t: 'm', ct }),
         (e) => {
           this.finish(id, p);

@@ -110,9 +110,14 @@ export function counterNonce(n: number): Bytes {
 // ---------- pairing ----------
 
 export interface PairLink {
-  v: 1;
-  relay: string;
-  room: string;
+  /** 1: through the relay; 2: over Nostr (desktop v0.6.0). */
+  v: 1 | 2;
+  relay?: string;
+  room?: string;
+  /** v2: the Nostr relays, the desktop's Nostr key, and when the code runs out (unix seconds). */
+  r?: string[];
+  n?: string;
+  x?: number;
   d: string; // b64u D_pub
   c: string; // b64u pairing code
   /** An invite to keep a wallet at a house (desktop v0.2.8, "Hosted wallets"): which house, and who invited. */
@@ -142,13 +147,36 @@ export async function parsePairLink(fragmentValue: string): Promise<PairLink> {
   } catch {
     throw new Error('This pairing link is damaged. Show the QR code again on your desktop.');
   }
-  if (obj?.v !== 1) throw new Error('This pairing link is from a newer or older version.');
-  if (typeof obj.relay !== 'string' || !/^wss?:\/\//.test(obj.relay)) throw new Error('The pairing link has no relay address.');
-  const d = fromB64u(String(obj.d ?? ''));
+  if (obj?.v !== 1 && obj?.v !== 2) throw new Error('This pairing link is from a newer or older version.');
+  let d: Bytes;
+  let c: Bytes;
+  try {
+    d = fromB64u(String(obj.d ?? ''));
+    c = fromB64u(String(obj.c ?? ''));
+  } catch {
+    throw new Error('This pairing link is damaged. Show the QR code again on your desktop.');
+  }
   if (d.length !== 65 || d[0] !== 4) throw new Error('The pairing link has a bad desktop key.');
-  if (fromB64u(String(obj.c ?? '')).length !== 16) throw new Error('The pairing link has a bad code.');
-  if ((await roomOf(d)) !== obj.room) throw new Error('The pairing link does not match its desktop key.');
-  const link: PairLink = { v: 1, relay: obj.relay, room: obj.room, d: obj.d, c: obj.c };
+  if (c.length !== 16) throw new Error('The pairing link has a bad code.');
+  let link: PairLink;
+  if (obj.v === 2) {
+    // Over Nostr (desktop v0.6.0): up to five relays, wss:// (ws:// only on this computer, for tests).
+    const local = (u: string) => /^ws:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(u);
+    const r = Array.isArray(obj.r) ? obj.r.filter((u: unknown) => typeof u === 'string') : [];
+    if (!r.length || r.length > 5 || r.length !== obj.r.length || !r.every((u: string) => /^wss:\/\/[^/\s@]+/.test(u) || local(u))) {
+      throw new Error('The pairing link has no usable relays.');
+    }
+    if (typeof obj.n !== 'string' || !/^[0-9a-f]{64}$/.test(obj.n)) throw new Error('The pairing link has a bad desktop key.');
+    const now = Math.floor(Date.now() / 1000);
+    // Two minutes' slack either way: the phone's clock and the desktop's needn't agree (review L4).
+    if (!Number.isSafeInteger(obj.x) || obj.x > now + 10 * 60 + 120) throw new Error('This pairing link is damaged. Show the QR code again on your desktop.');
+    if (obj.x < now - 120) throw new Error('This pairing code has run out. Make a new one on your desktop.');
+    link = { v: 2, r, n: obj.n, x: obj.x, d: obj.d, c: obj.c };
+  } else {
+    if (typeof obj.relay !== 'string' || !/^wss?:\/\//.test(obj.relay)) throw new Error('The pairing link has no relay address.');
+    if ((await roomOf(d)) !== obj.room) throw new Error('The pairing link does not match its desktop key.');
+    link = { v: 1, relay: obj.relay, room: obj.room, d: obj.d, c: obj.c };
+  }
   if (obj.h !== undefined) {
     const h = obj.h;
     if (!h || typeof h !== 'object' || !Number.isSafeInteger(h.house) || h.house < 0) throw new Error('This invite link is damaged. Ask for the QR code again.');
@@ -202,12 +230,15 @@ export async function buildPairFrame(opts: {
   name: string;
   /** Joining from an invite (desktop v0.2.8): the plaintext says `"hosted": true`. */
   hosted?: boolean;
+  /** Over Nostr (desktop v0.6.0): this phone's Nostr key, which its sessions will come from. */
+  np?: string;
   nonce?: Bytes;
 }): Promise<PairFrame> {
   const k = await aesKey(await pairKeyBytes(opts.e.privateKey, opts.dPub, opts.c));
   const nonce = opts.nonce ?? randomBytes(12);
   const req: Record<string, unknown> = { p: b64u(opts.pPub), name: opts.name };
   if (opts.hosted) req.hosted = true;
+  if (opts.np) req.np = opts.np;
   const pt = utf8(JSON.stringify(req));
   const ct = await aesSeal(k, nonce, pt);
   return { t: 'pair', e: b64u(await exportPub(opts.e.publicKey)), ct: b64u(ct), n: b64u(nonce) };
@@ -246,6 +277,14 @@ export async function phoneSessionSecret(o: {
  * callers must send sealed frames in the order the promises were created (they resolve in order).
  * Any decrypt failure poisons the session: the caller must close the connection.
  */
+/** JSON text padded with spaces (which JSON ignores) to 1, 4 or 16 KiB (desktop v0.6.0): relays see a few sizes, not
+ * each message's. Nothing longer is padded, so no request outgrows the old relay's 64 KiB frames (review L3). */
+export function padJson(text: string): string {
+  const n = utf8(text).length;
+  const to = n <= 1024 ? 1024 : n <= 4096 ? 4096 : n <= 16_384 ? 16_384 : n;
+  return text + ' '.repeat(to - n);
+}
+
 export class Session {
   private sendN = 0;
   private recvN = 0;
@@ -267,9 +306,11 @@ export class Session {
     return new Session(await aesKey(secret.kDp), await aesKey(secret.kPd));
   }
 
-  seal(obj: unknown): Promise<string> {
+  /** `pad`: to a few sizes (`padJson`); the test vectors' messages aren't. */
+  seal(obj: unknown, pad = false): Promise<string> {
     const n = this.sendN++;
-    const p = this.sendQ.then(async () => b64u(await aesSeal(this.kSend, counterNonce(n), utf8(JSON.stringify(obj)))));
+    const text = pad ? padJson(JSON.stringify(obj)) : JSON.stringify(obj);
+    const p = this.sendQ.then(async () => b64u(await aesSeal(this.kSend, counterNonce(n), utf8(text))));
     this.sendQ = p.catch(() => {});
     return p;
   }

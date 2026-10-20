@@ -9,7 +9,8 @@
   import { PhoneClient, type Status } from '../lib/api';
   import { parsePairLink, showPairCode, type PairLink } from '../lib/crypto';
   import { pairPhone, PairRefusedError, relayMatchesPage } from '../lib/pair';
-  import { OfflineError, RelayLink } from '../lib/relay';
+  import { OfflineError } from '../lib/relay';
+  import { connectFor } from '../lib/carrier';
   import { pairValueFrom } from '../lib/homescreen';
   import { stepOf } from '../lib/hosted';
   import { finishMove, saveMoving, type Pairing } from '../lib/store';
@@ -58,7 +59,7 @@
     try {
       link = await parsePairLink(value);
       if (link.h) throw new Error("That's an invite to a house. Scan the pairing code FreeBank on your computer shows (Settings › Phone › Pair a phone).");
-      if (!relayMatchesPage(link.relay, location)) throw new Error('This pairing link is for another server, not this page.');
+      if (link.v === 1 && !relayMatchesPage(link.relay ?? '', location)) throw new Error('This pairing link is for another server, not this page.');
     } catch (e) {
       error = (e as Error).message;
       state = 'error';
@@ -87,7 +88,7 @@
     state = 'checking';
     error = '';
     freshClient?.stop();
-    freshClient = new PhoneClient({ pPriv: p.pPriv, pPub: p.pPub, d: p.d }, () => RelayLink.open(p.relay, p.room));
+    freshClient = new PhoneClient({ pPriv: p.pPriv, pPub: p.pPub, d: p.d }, connectFor(p));
     freshClient.start();
     try {
       const st = await client.nodeStatus();

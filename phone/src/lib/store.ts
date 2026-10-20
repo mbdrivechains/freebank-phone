@@ -8,9 +8,15 @@
 import type { HostedInvite } from './crypto';
 
 export interface Pairing {
-  v: 1;
-  relay: string; // wss://…/ws
-  room: string;
+  /** 1: through the relay (`relay`, `room`); 2: over Nostr (desktop v0.6.0: `relays`, `n`, `nsec`). */
+  v: 1 | 2;
+  relay?: string; // wss://…/ws
+  room?: string;
+  /** Over Nostr: the relays (the desktop's `status` keeps them current), the desktop's Nostr key, and this phone's
+   * Nostr secret key (it only signs events: the device key P below is what the desktop knows this phone by). */
+  relays?: string[];
+  n?: string;
+  nsec?: Uint8Array;
   d: string; // b64u D_pub
   pPub: string; // b64u P_pub
   pPriv: CryptoKey; // non-extractable ECDH private key
@@ -61,7 +67,8 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
 
 async function load(key: string): Promise<Pairing | null> {
   const p = (await tx<Pairing>('readonly', (s) => s.get(key))) ?? null;
-  return p && p.v === 1 && p.pPriv ? p : null;
+  const usable = p?.v === 1 ? !!p.relay && !!p.room : p?.v === 2 ? !!p.relays?.length && !!p.n && p.nsec instanceof Uint8Array : false;
+  return p && usable && p.pPriv ? p : null;
 }
 
 export const loadPairing = () => load(KEY);

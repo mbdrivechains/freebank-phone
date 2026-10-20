@@ -37,8 +37,9 @@
   async function readLink(value: string) {
     try {
       const l = await parsePairLink(value);
-      if (!relayMatchesPage(l.relay, location)) {
-        const shown = l.relay.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '');
+      // A link through the relay must name this page's own (v1); one over Nostr names public relays (desktop v0.6.0).
+      if (l.v === 1 && !relayMatchesPage(l.relay ?? '', location)) {
+        const shown = (l.relay ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '');
         const where = shown.length > 60 ? shown.slice(0, 60) + '…' : shown;
         throw new Error(`This pairing link is for another server (${where}), not this page. Use the link your FreeBank desktop shows.`);
       }
@@ -126,7 +127,7 @@
       if (e instanceof PairRefusedError) {
         state = 'refused';
       } else if (e instanceof OfflineError) {
-        message = 'Your desktop app is not connected to the relay. Open FreeBank on your desktop, then scan the pairing code again.';
+        message = "Your desktop isn't answering. Open FreeBank on your desktop, then scan the pairing code again.";
         state = 'error';
       } else {
         message = (e as Error).message;

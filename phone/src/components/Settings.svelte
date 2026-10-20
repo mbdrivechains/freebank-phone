@@ -15,12 +15,16 @@
   $: hosted = isHosted(pairing);
   $: houseName = pairing.house?.name ?? 'the house';
 
+  // Over Nostr (desktop v0.6.0) the link goes through public relays; through the relay, one host and its room.
   $: relayHost = (() => {
-    try {
-      return new URL(pairing.relay).host;
-    } catch {
-      return pairing.relay;
-    }
+    const hostOf = (u: string) => {
+      try {
+        return new URL(u).host;
+      } catch {
+        return u;
+      }
+    };
+    return pairing.v === 2 ? (pairing.relays ?? []).map(hostOf).join(', ') : hostOf(pairing.relay ?? '');
   })();
 </script>
 
@@ -38,10 +42,19 @@
       <dt>Invited by</dt>
       <dd>{pairing.house?.by ?? ''}</dd>
     {/if}
-    <dt>Desktop</dt>
-    <dd class="mono">{pairing.room}</dd>
-    <dt>Relay</dt>
-    <dd class="mono">{relayHost}</dd>
+    {#if pairing.v === 2}
+      <dt>Desktop</dt>
+      <dd class="mono">{(pairing.n ?? '').slice(0, 16)}</dd>
+      <dt>Link</dt>
+      <dd>Over Nostr</dd>
+      <dt>Relays</dt>
+      <dd class="mono" data-testid="relays">{relayHost}</dd>
+    {:else}
+      <dt>Desktop</dt>
+      <dd class="mono">{pairing.room}</dd>
+      <dt>Relay</dt>
+      <dd class="mono">{relayHost}</dd>
+    {/if}
   </dl>
 
   {#if hosted}

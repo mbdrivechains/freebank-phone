@@ -36,10 +36,11 @@ if (!existsSync(join(dist, 'index.html'))) {
   process.exit(1);
 }
 
-// The headers fb-relay sends (relay/src/lib.rs, CSP and PERMISSIONS_POLICY): only 'self', and FreeBank's helper.
+// The headers fb-relay sends (relay/src/lib.rs, CSP and PERMISSIONS_POLICY): only 'self', FreeBank's helper, and
+// (desktop v0.6.0) the Nostr relays over wss:.
 const ASK_URL = 'https://ask.ecxfreebank.com/ask';
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; " +
-  "connect-src 'self' https://ask.ecxfreebank.com; " +
+  "connect-src 'self' https://ask.ecxfreebank.com wss:; " +
   "manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const PERMISSIONS = 'camera=(self), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), fullscreen=()';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };

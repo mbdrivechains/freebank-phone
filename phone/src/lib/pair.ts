@@ -1,6 +1,8 @@
 // Phone side of pairing (relay/PROTOCOL.md, "Pairing" and "The comparison code").
 import { buildPairFrame, exportPub, fromB64u, genKeyPair, b64u, pairCode, type PairLink } from './crypto';
-import { RelayLink } from './relay';
+import { OfflineError, RelayLink, type Transport } from './relay';
+import { NostrLink } from './nostrlink';
+import { newNostrSecret, nostrPub } from './nostr';
 import { savePairing, type Pairing } from './store';
 import { note } from './activity';
 
@@ -45,11 +47,16 @@ export async function pairPhone(
   const pPub = await exportPub(P.publicKey);
   const dPub = fromB64u(link.d);
   const c = fromB64u(link.c);
+  // Over Nostr (desktop v0.6.0) this phone has a Nostr key of its own, named in the request: its sessions come from it.
+  const nsec = link.v === 2 ? newNostrSecret() : undefined;
+  const np = nsec ? nostrPub(nsec) : undefined;
   // An invite's link (`h`) joins a wallet kept at a house (desktop v0.2.8): the request says so.
-  const frame = await buildPairFrame({ e: E, dPub, c, pPub, name, hosted: !!link.h });
+  const frame = await buildPairFrame({ e: E, dPub, c, pPub, name, hosted: !!link.h, np });
   const code = await pairCode(dPub, pPub, await exportPub(E.publicKey), c);
 
-  const relay = await RelayLink.open(link.relay, link.room);
+  const relay: Transport = nsec
+    ? await NostrLink.open({ relays: link.r ?? [], n: link.n ?? '', secret: nsec })
+    : await RelayLink.open(link.relay ?? '', link.room ?? '');
   try {
     const answer = await new Promise<string>((resolve, reject) => {
       const timer = setTimeout(
@@ -64,9 +71,10 @@ export async function pairPhone(
           resolve(f.t);
         }
       };
-      relay.onEnd = () => {
+      relay.onEnd = (why) => {
         clearTimeout(timer);
-        reject(new Error('The connection to your desktop dropped while pairing. Try again.'));
+        // Over Nostr, a desktop that is there says `pair-seen` at once (v0.6.0); no word at all means it isn't.
+        reject(why === 'offline' ? new OfflineError() : new Error('The connection to your desktop dropped while pairing. Try again.'));
       };
       relay.send(frame);
       note('pairing: asked the desktop');
@@ -80,9 +88,7 @@ export async function pairPhone(
   }
 
   const pairing: Pairing = {
-    v: 1,
-    relay: link.relay,
-    room: link.room,
+    ...(nsec ? { v: 2 as const, relays: link.r, n: link.n, nsec } : { v: 1 as const, relay: link.relay, room: link.room }),
     d: link.d,
     pPub: b64u(pPub),
     pPriv: P.privateKey,
