@@ -136,7 +136,8 @@ export function tokenLink(token: string, origin = location.origin + location.pat
   return `${origin}#token=${token}`;
 }
 
-/** A FreeBank address, as the desktop shows it. */
+/** A FreeBank address, as the desktop shows it: a plain (P2PKH) one, X…, the only kind notes go to. A wallet's
+ *  default address on easynet (s…) isn't one. */
 export function addressOk(a: string): boolean {
   return /^X[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(a.trim());
 }
@@ -473,7 +474,7 @@ export class TokenWallet {
    *  outcome isn't known yet (the tokens stay set aside until it is). */
   redeem(address: string, units: number): Promise<'paid' | 'pending'> {
     return serial(async () => {
-      if (!addressOk(address)) throw new Error("That isn't a FreeBank address.");
+      if (!addressOk(address)) throw new Error("That isn't a FreeBank address for notes: one starts with X (the desktop app's Receive gives one).");
       if (units < this.minRedeem()) throw new Error(`The house pays out at least ${(this.minRedeem() / 1e8).toFixed(8).replace(/\.?0+$/, '')} sECX at a time.`);
       const request = `freebank:${address.trim()}?units=${units}`;
       const q = await this.wallet.createMeltQuote<MeltQuote>(METHOD, { method: METHOD, request, unit: UNIT });
